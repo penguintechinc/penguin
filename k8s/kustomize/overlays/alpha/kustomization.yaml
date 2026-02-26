@@ -1,0 +1,39 @@
+---
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+metadata:
+  name: project-template-alpha
+
+namespace: project-template-alpha
+
+namePrefix: alpha-
+
+commonLabels:
+  environment: alpha
+
+bases:
+- ../../base
+
+replicas:
+- name: flask-backend
+  count: 1
+- name: go-backend
+  count: 1
+- name: webui
+  count: 1
+
+images:
+- name: registry-dal2.penguintech.io/project-template/flask-backend
+  newTag: latest
+- name: registry-dal2.penguintech.io/project-template/go-backend
+  newTag: latest
+- name: registry-dal2.penguintech.io/project-template/webui
+  newTag: latest
+
+configMapGenerator:
+- name: project-template-config
+  behavior: merge
+  literals:
+  - LOG_LEVEL=DEBUG
+  - RELEASE_MODE=false

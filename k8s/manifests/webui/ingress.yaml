@@ -1,0 +1,44 @@
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: webui
+  namespace: project-template
+  labels:
+    app.kubernetes.io/name: webui
+    app.kubernetes.io/component: frontend
+    app.kubernetes.io/managed-by: kustomize
+  annotations:
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+spec:
+  ingressClassName: nginx
+  tls:
+  - hosts:
+    - project-template.local
+    secretName: project-template-tls
+  rules:
+  - host: project-template.local
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: webui
+            port:
+              number: 3000
+      - path: /api/v1
+        pathType: Prefix
+        backend:
+          service:
+            name: flask-backend
+            port:
+              number: 5000
+      - path: /api/v2
+        pathType: Prefix
+        backend:
+          service:
+            name: go-backend
+            port:
+              number: 8080

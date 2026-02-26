@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "flask-backend.fullname" . }}-config
+  labels:
+    {{- include "flask-backend.labels" . | nindent 4 }}
+  namespace: {{ .Release.Namespace }}
+data:
+  {{- toYaml .Values.configMapData | nindent 2 }}

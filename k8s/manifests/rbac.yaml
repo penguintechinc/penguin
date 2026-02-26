@@ -1,0 +1,45 @@
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: project-template
+  namespace: project-template
+  labels:
+    app.kubernetes.io/name: project-template
+    app.kubernetes.io/managed-by: kustomize
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: project-template
+  namespace: project-template
+  labels:
+    app.kubernetes.io/name: project-template
+    app.kubernetes.io/managed-by: kustomize
+rules:
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["services"]
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: project-template
+  namespace: project-template
+  labels:
+    app.kubernetes.io/name: project-template
+    app.kubernetes.io/managed-by: kustomize
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: project-template
+subjects:
+- kind: ServiceAccount
+  name: project-template
+  namespace: project-template

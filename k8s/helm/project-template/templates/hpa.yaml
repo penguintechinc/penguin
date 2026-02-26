@@ -1,0 +1,106 @@
+{{- if .Values.autoscaling.enabled }}
+{{- if and .Values.flaskBackend.enabled (or .Values.autoscaling.flaskBackend.enabled .Values.autoscaling.enabled) }}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "project-template.flaskBackend.fullname" . }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "project-template.flaskBackend.labels" . | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "project-template.flaskBackend.fullname" . }}
+  minReplicas: {{ .Values.autoscaling.flaskBackend.minReplicas }}
+  maxReplicas: {{ .Values.autoscaling.flaskBackend.maxReplicas }}
+  metrics:
+  {{- if .Values.autoscaling.flaskBackend.targetCPUUtilizationPercentage }}
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: {{ .Values.autoscaling.flaskBackend.targetCPUUtilizationPercentage }}
+  {{- end }}
+  {{- if .Values.autoscaling.flaskBackend.targetMemoryUtilizationPercentage }}
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: {{ .Values.autoscaling.flaskBackend.targetMemoryUtilizationPercentage }}
+  {{- end }}
+{{- end }}
+
+{{- if and .Values.goBackend.enabled (or .Values.autoscaling.goBackend.enabled .Values.autoscaling.enabled) }}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "project-template.goBackend.fullname" . }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "project-template.goBackend.labels" . | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "project-template.goBackend.fullname" . }}
+  minReplicas: {{ .Values.autoscaling.goBackend.minReplicas }}
+  maxReplicas: {{ .Values.autoscaling.goBackend.maxReplicas }}
+  metrics:
+  {{- if .Values.autoscaling.goBackend.targetCPUUtilizationPercentage }}
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: {{ .Values.autoscaling.goBackend.targetCPUUtilizationPercentage }}
+  {{- end }}
+  {{- if .Values.autoscaling.goBackend.targetMemoryUtilizationPercentage }}
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: {{ .Values.autoscaling.goBackend.targetMemoryUtilizationPercentage }}
+  {{- end }}
+{{- end }}
+
+{{- if and .Values.webui.enabled (or .Values.autoscaling.webui.enabled .Values.autoscaling.enabled) }}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "project-template.webui.fullname" . }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "project-template.webui.labels" . | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "project-template.webui.fullname" . }}
+  minReplicas: {{ .Values.autoscaling.webui.minReplicas }}
+  maxReplicas: {{ .Values.autoscaling.webui.maxReplicas }}
+  metrics:
+  {{- if .Values.autoscaling.webui.targetCPUUtilizationPercentage }}
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: {{ .Values.autoscaling.webui.targetCPUUtilizationPercentage }}
+  {{- end }}
+  {{- if .Values.autoscaling.webui.targetMemoryUtilizationPercentage }}
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: {{ .Values.autoscaling.webui.targetMemoryUtilizationPercentage }}
+  {{- end }}
+{{- end }}
+{{- end }}

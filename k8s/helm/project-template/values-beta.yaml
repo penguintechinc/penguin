@@ -1,0 +1,256 @@
+# Beta environment values for project-template
+# Pre-production testing environment
+
+namespace: project-template-beta
+namespaceCreate: true
+
+# Flask Backend - Beta Configuration
+flaskBackend:
+  enabled: true
+  image:
+    repository: registry-dal2.penguintech.io/project-template/flask-backend
+    tag: latest
+    pullPolicy: Always
+  replicaCount: 2
+  resources:
+    limits:
+      cpu: 400m
+      memory: 512Mi
+    requests:
+      cpu: 250m
+      memory: 256Mi
+  env:
+    - name: FLASK_ENV
+      value: staging
+    - name: FLASK_APP
+      value: app.py
+    - name: PORT
+      value: "5000"
+    - name: GRPC_PORT
+      value: "50051"
+
+# Go Backend - Beta Configuration
+goBackend:
+  enabled: true
+  image:
+    repository: registry-dal2.penguintech.io/project-template/go-backend
+    tag: latest
+    pullPolicy: Always
+  replicaCount: 2
+  resources:
+    limits:
+      cpu: 800m
+      memory: 1Gi
+    requests:
+      cpu: 250m
+      memory: 512Mi
+  env:
+    - name: PORT
+      value: "8080"
+    - name: GRPC_PORT
+      value: "50052"
+    - name: GO_ENV
+      value: staging
+
+# WebUI - Beta Configuration
+webui:
+  enabled: true
+  image:
+    repository: registry-dal2.penguintech.io/project-template/webui
+    tag: latest
+    pullPolicy: Always
+  replicaCount: 2
+  resources:
+    limits:
+      cpu: 200m
+      memory: 256Mi
+    requests:
+      cpu: 100m
+      memory: 128Mi
+  env:
+    - name: PORT
+      value: "3000"
+    - name: REACT_APP_FLASK_API_URL
+      value: https://project-template.penguintech.cloud/api/v1
+    - name: REACT_APP_GO_API_URL
+      value: https://project-template.penguintech.cloud/api/v2
+
+# PostgreSQL - Beta Configuration
+postgresql:
+  enabled: true
+  auth:
+    username: beta_user
+    password: beta_secure_password
+    database: beta_db
+  primary:
+    persistence:
+      enabled: true
+      storageClass: longhorn
+      size: 20Gi
+    resources:
+      limits:
+        cpu: 750m
+        memory: 1536Mi
+      requests:
+        cpu: 250m
+        memory: 512Mi
+  metrics:
+    enabled: true
+
+# Redis - Beta Configuration
+redis:
+  enabled: true
+  auth:
+    enabled: true
+    password: beta_redis_secure_password
+  master:
+    persistence:
+      enabled: true
+      storageClass: longhorn
+      size: 8Gi
+    resources:
+      limits:
+        cpu: 400m
+        memory: 512Mi
+      requests:
+        cpu: 100m
+        memory: 256Mi
+  metrics:
+    enabled: true
+
+# Ingress - Beta Configuration
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-staging
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/rate-limit: "100"
+  hosts:
+    - host: project-template.penguintech.cloud
+      paths:
+        - path: /api/v1
+          pathType: Prefix
+          backend:
+            service:
+              name: project-template-flask-backend
+              port: 5000
+        - path: /api/v2
+          pathType: Prefix
+          backend:
+            service:
+              name: project-template-go-backend
+              port: 8080
+        - path: /
+          pathType: Prefix
+          backend:
+            service:
+              name: project-template-webui
+              port: 3000
+  tls:
+    - secretName: penguintech-cloud-wildcard-tls
+      hosts:
+        - project-template.penguintech.cloud
+
+# Autoscaling - Limited for Beta
+autoscaling:
+  enabled: true
+  flaskBackend:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 5
+    targetCPUUtilizationPercentage: 75
+    targetMemoryUtilizationPercentage: 80
+  goBackend:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 6
+    targetCPUUtilizationPercentage: 75
+    targetMemoryUtilizationPercentage: 80
+  webui:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 4
+    targetCPUUtilizationPercentage: 75
+    targetMemoryUtilizationPercentage: 80
+
+# Monitoring - Enabled for Beta
+monitoring:
+  enabled: true
+  prometheus:
+    enabled: true
+    port: 9090
+    serviceMonitor:
+      enabled: true
+      interval: 30s
+  grafana:
+    enabled: true
+    port: 3001
+    adminUser: admin
+    adminPassword: beta-grafana-password
+
+# Network Policy - Enabled for Beta
+networkPolicy:
+  enabled: true
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    enabled: true
+  egress:
+    enabled: true
+
+# Service Account
+serviceAccount:
+  create: true
+  name: project-template-beta-sa
+
+# Shared Configuration - Beta
+config:
+  # Database settings
+  DB_HOST: project-template-postgresql
+  DB_PORT: "5432"
+  DB_NAME: beta_db
+  DB_USER: beta_user
+  DB_POOL_SIZE: "8"
+  DB_MAX_OVERFLOW: "15"
+
+  # Redis settings
+  REDIS_HOST: project-template-redis-master
+  REDIS_PORT: "6379"
+  REDIS_DB: "0"
+
+  # Application settings
+  LOG_LEVEL: info
+  LOG_FORMAT: json
+  ENVIRONMENT: beta
+
+  # License server
+  LICENSE_SERVER_URL: https://license.penguintech.io
+  LICENSE_CHECK_INTERVAL: "3600"
+
+  # Feature flags
+  ENABLE_METRICS: "true"
+  ENABLE_TRACING: "true"
+  ENABLE_DEBUG_ENDPOINTS: "false"
+
+  # API settings
+  API_TIMEOUT: "30"
+  API_RATE_LIMIT: "100"
+
+  # CORS settings
+  CORS_ALLOWED_ORIGINS: https://project-template.penguintech.cloud
+
+  # Session settings
+  SESSION_TIMEOUT: "3600"
+  SESSION_COOKIE_SECURE: "true"
+
+# Secrets - Beta (should be managed via sealed secrets)
+secrets:
+  SECRET_KEY: beta-secure-secret-key-changeme
+  DB_PASSWORD: beta_secure_password
+  REDIS_PASSWORD: beta_redis_secure_password
+  LICENSE_KEY: beta-license-key-changeme
+  JWT_SECRET: beta-jwt-secret-changeme
+  API_KEY: beta-api-key-changeme

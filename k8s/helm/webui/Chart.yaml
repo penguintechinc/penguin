@@ -1,0 +1,14 @@
+apiVersion: v2
+name: webui
+description: ReactJS frontend with Node.js server and Nginx proxy
+type: application
+version: 1.0.0
+appVersion: "1.0.0"
+keywords:
+  - react
+  - nodejs
+  - frontend
+  - webui
+maintainers:
+  - name: Penguin Tech Inc
+    email: support@penguintech.io

@@ -1,0 +1,90 @@
+{{- if .Values.webui.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "project-template.webui.fullname" . }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "project-template.webui.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.webui.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "project-template.webui.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "project-template.webui.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "project-template.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.webui.securityContext | nindent 8 }}
+      containers:
+      - name: webui
+        image: "{{ .Values.webui.image.repository }}:{{ .Values.webui.image.tag }}"
+        imagePullPolicy: {{ .Values.webui.image.pullPolicy }}
+        ports:
+        - name: http
+          containerPort: {{ .Values.webui.service.port }}
+          protocol: TCP
+        env:
+        {{- toYaml .Values.webui.env | nindent 8 }}
+        envFrom:
+        {{- toYaml .Values.webui.envFrom | nindent 8 }}
+        livenessProbe:
+          {{- toYaml .Values.webui.livenessProbe | nindent 10 }}
+        readinessProbe:
+          {{- toYaml .Values.webui.readinessProbe | nindent 10 }}
+        resources:
+          {{- toYaml .Values.webui.resources | nindent 10 }}
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+        - name: cache
+          mountPath: /app/.cache
+      volumes:
+      - name: tmp
+        emptyDir: {}
+      - name: cache
+        emptyDir: {}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "project-template.webui.fullname" . }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "project-template.webui.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.webui.service.type }}
+  ports:
+  - port: {{ .Values.webui.service.port }}
+    targetPort: http
+    protocol: TCP
+    name: http
+  selector:
+    {{- include "project-template.webui.selectorLabels" . | nindent 4 }}
+{{- end }}

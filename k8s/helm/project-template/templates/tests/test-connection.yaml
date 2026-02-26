@@ -1,0 +1,38 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: "{{ include "project-template.fullname" . }}-test-connection"
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "project-template.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": test
+    "helm.sh/hook-delete-policy": hook-succeeded,hook-failed
+spec:
+  containers:
+  - name: wget
+    image: busybox:1.36
+    command: ['sh', '-c']
+    args:
+    - |
+      set -e
+      echo "Testing Flask Backend service..."
+      {{- if .Values.flaskBackend.enabled }}
+      wget --spider --timeout=5 http://{{ include "project-template.flaskBackend.fullname" . }}:{{ .Values.flaskBackend.service.port }}/healthz || exit 1
+      echo "Flask Backend is healthy"
+      {{- end }}
+
+      echo "Testing Go Backend service..."
+      {{- if .Values.goBackend.enabled }}
+      wget --spider --timeout=5 http://{{ include "project-template.goBackend.fullname" . }}:{{ .Values.goBackend.service.port }}/healthz || exit 1
+      echo "Go Backend is healthy"
+      {{- end }}
+
+      echo "Testing WebUI service..."
+      {{- if .Values.webui.enabled }}
+      wget --spider --timeout=5 http://{{ include "project-template.webui.fullname" . }}:{{ .Values.webui.service.port }}/healthz || exit 1
+      echo "WebUI is healthy"
+      {{- end }}
+
+      echo "All services are healthy!"
+  restartPolicy: Never

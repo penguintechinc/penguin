@@ -1,0 +1,19 @@
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: webui
+  namespace: project-template
+  labels:
+    app.kubernetes.io/name: webui
+    app.kubernetes.io/component: frontend
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: webui
+  ports:
+  - name: http
+    port: 3000
+    targetPort: 3000
+    protocol: TCP

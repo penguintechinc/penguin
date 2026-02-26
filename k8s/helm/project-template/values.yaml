@@ -1,0 +1,391 @@
+# Default values for project-template
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+# Global settings
+namespace: project-template
+namespaceCreate: true
+
+# Flask Backend Service
+flaskBackend:
+  enabled: true
+  image:
+    repository: registry-dal2.penguintech.io/project-template/flask-backend
+    tag: latest
+    pullPolicy: IfNotPresent
+  replicaCount: 3
+  service:
+    type: ClusterIP
+    port: 5000
+    grpcPort: 50051
+  resources:
+    limits:
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 125m
+      memory: 256Mi
+  livenessProbe:
+    httpGet:
+      path: /healthz
+      port: 5000
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+  readinessProbe:
+    httpGet:
+      path: /healthz
+      port: 5000
+    initialDelaySeconds: 10
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 3
+  env:
+    - name: FLASK_ENV
+      value: production
+    - name: FLASK_APP
+      value: app.py
+    - name: PORT
+      value: "5000"
+    - name: GRPC_PORT
+      value: "50051"
+  envFrom:
+    - configMapRef:
+        name: project-template-config
+    - secretRef:
+        name: project-template-secret
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop:
+        - ALL
+    readOnlyRootFilesystem: false
+
+# Go Backend Service
+goBackend:
+  enabled: true
+  image:
+    repository: registry-dal2.penguintech.io/project-template/go-backend
+    tag: latest
+    pullPolicy: IfNotPresent
+  replicaCount: 3
+  service:
+    type: ClusterIP
+    port: 8080
+    grpcPort: 50052
+  resources:
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+    requests:
+      cpu: 200m
+      memory: 512Mi
+  livenessProbe:
+    httpGet:
+      path: /healthz
+      port: 8080
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+  readinessProbe:
+    httpGet:
+      path: /healthz
+      port: 8080
+    initialDelaySeconds: 10
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 3
+  env:
+    - name: PORT
+      value: "8080"
+    - name: GRPC_PORT
+      value: "50052"
+    - name: GO_ENV
+      value: production
+  envFrom:
+    - configMapRef:
+        name: project-template-config
+    - secretRef:
+        name: project-template-secret
+  # XDP/eBPF requires privileged mode
+  privileged: true
+  securityContext:
+    runAsUser: 0
+    allowPrivilegeEscalation: true
+    capabilities:
+      add:
+        - NET_ADMIN
+        - SYS_ADMIN
+        - IPC_LOCK
+      drop:
+        - ALL
+    privileged: true
+  volumeMounts:
+    - name: bpf-maps
+      mountPath: /sys/fs/bpf
+  volumes:
+    - name: bpf-maps
+      hostPath:
+        path: /sys/fs/bpf
+        type: DirectoryOrCreate
+
+# WebUI Service
+webui:
+  enabled: true
+  image:
+    repository: registry-dal2.penguintech.io/project-template/webui
+    tag: latest
+    pullPolicy: IfNotPresent
+  replicaCount: 2
+  service:
+    type: ClusterIP
+    port: 3000
+  resources:
+    limits:
+      cpu: 200m
+      memory: 256Mi
+    requests:
+      cpu: 50m
+      memory: 128Mi
+  livenessProbe:
+    httpGet:
+      path: /healthz
+      port: 3000
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+  readinessProbe:
+    httpGet:
+      path: /healthz
+      port: 3000
+    initialDelaySeconds: 10
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 3
+  env:
+    - name: PORT
+      value: "3000"
+    - name: REACT_APP_FLASK_API_URL
+      value: http://project-template-flask-backend:5000
+    - name: REACT_APP_GO_API_URL
+      value: http://project-template-go-backend:8080
+  envFrom:
+    - configMapRef:
+        name: project-template-config
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop:
+        - ALL
+    readOnlyRootFilesystem: true
+
+# PostgreSQL Database (Bitnami subchart)
+postgresql:
+  enabled: true
+  auth:
+    username: project_template_user
+    password: project_template_password
+    database: project_template_db
+    existingSecret: ""
+  primary:
+    persistence:
+      enabled: true
+      storageClass: longhorn
+      size: 20Gi
+    resources:
+      limits:
+        cpu: 1000m
+        memory: 2Gi
+      requests:
+        cpu: 250m
+        memory: 512Mi
+  metrics:
+    enabled: true
+
+# Redis Cache (Bitnami subchart)
+redis:
+  enabled: true
+  auth:
+    enabled: true
+    password: redis_password
+    existingSecret: ""
+  master:
+    persistence:
+      enabled: true
+      storageClass: longhorn
+      size: 8Gi
+    resources:
+      limits:
+        cpu: 500m
+        memory: 512Mi
+      requests:
+        cpu: 100m
+        memory: 128Mi
+  metrics:
+    enabled: true
+
+# Ingress Configuration
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+  hosts:
+    - host: project-template.penguintech.io
+      paths:
+        - path: /api/v1
+          pathType: Prefix
+          backend:
+            service:
+              name: project-template-flask-backend
+              port: 5000
+        - path: /api/v2
+          pathType: Prefix
+          backend:
+            service:
+              name: project-template-go-backend
+              port: 8080
+        - path: /
+          pathType: Prefix
+          backend:
+            service:
+              name: project-template-webui
+              port: 3000
+  tls:
+    - secretName: penguintech-wildcard-tls
+      hosts:
+        - project-template.penguintech.io
+
+# Horizontal Pod Autoscaler
+autoscaling:
+  enabled: true
+  flaskBackend:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 80
+  goBackend:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 15
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 80
+  webui:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 8
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 80
+
+# Monitoring
+monitoring:
+  enabled: false
+  prometheus:
+    enabled: false
+    port: 9090
+    serviceMonitor:
+      enabled: true
+      interval: 30s
+  grafana:
+    enabled: false
+    port: 3001
+    adminUser: admin
+    adminPassword: admin
+
+# Network Policy
+networkPolicy:
+  enabled: true
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    enabled: true
+  egress:
+    enabled: true
+
+# Service Account
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+# Image Pull Secrets
+imagePullSecrets: []
+
+# Pod Annotations
+podAnnotations: {}
+
+# Pod Security Context
+podSecurityContext: {}
+
+# Node Selector
+nodeSelector: {}
+
+# Tolerations
+tolerations: []
+
+# Affinity
+affinity: {}
+
+# Shared Configuration
+config:
+  # Database settings
+  DB_HOST: project-template-postgresql
+  DB_PORT: "5432"
+  DB_NAME: project_template_db
+  DB_USER: project_template_user
+  DB_POOL_SIZE: "10"
+  DB_MAX_OVERFLOW: "20"
+
+  # Redis settings
+  REDIS_HOST: project-template-redis-master
+  REDIS_PORT: "6379"
+  REDIS_DB: "0"
+
+  # Application settings
+  LOG_LEVEL: info
+  LOG_FORMAT: json
+  ENVIRONMENT: production
+
+  # License server
+  LICENSE_SERVER_URL: https://license.penguintech.io
+  LICENSE_CHECK_INTERVAL: "3600"
+
+  # Feature flags
+  ENABLE_METRICS: "true"
+  ENABLE_TRACING: "false"
+  ENABLE_DEBUG_ENDPOINTS: "false"
+
+  # API settings
+  API_TIMEOUT: "30"
+  API_RATE_LIMIT: "100"
+
+  # CORS settings
+  CORS_ALLOWED_ORIGINS: https://project-template.penguintech.io
+
+  # Session settings
+  SESSION_TIMEOUT: "3600"
+  SESSION_COOKIE_SECURE: "true"
+
+# Secrets (should be overridden in values-*.yaml or via sealed secrets)
+secrets:
+  SECRET_KEY: changeme-secret-key-production
+  DB_PASSWORD: project_template_password
+  REDIS_PASSWORD: redis_password
+  LICENSE_KEY: changeme-license-key
+  JWT_SECRET: changeme-jwt-secret
+  API_KEY: changeme-api-key

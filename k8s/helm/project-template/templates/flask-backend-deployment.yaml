@@ -1,0 +1,88 @@
+{{- if .Values.flaskBackend.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "project-template.flaskBackend.fullname" . }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "project-template.flaskBackend.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.flaskBackend.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "project-template.flaskBackend.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "project-template.flaskBackend.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "project-template.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.flaskBackend.securityContext | nindent 8 }}
+      containers:
+      - name: flask-backend
+        image: "{{ .Values.flaskBackend.image.repository }}:{{ .Values.flaskBackend.image.tag }}"
+        imagePullPolicy: {{ .Values.flaskBackend.image.pullPolicy }}
+        ports:
+        - name: http
+          containerPort: {{ .Values.flaskBackend.service.port }}
+          protocol: TCP
+        - name: grpc
+          containerPort: {{ .Values.flaskBackend.service.grpcPort }}
+          protocol: TCP
+        env:
+        {{- toYaml .Values.flaskBackend.env | nindent 8 }}
+        envFrom:
+        {{- toYaml .Values.flaskBackend.envFrom | nindent 8 }}
+        livenessProbe:
+          {{- toYaml .Values.flaskBackend.livenessProbe | nindent 10 }}
+        readinessProbe:
+          {{- toYaml .Values.flaskBackend.readinessProbe | nindent 10 }}
+        resources:
+          {{- toYaml .Values.flaskBackend.resources | nindent 10 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "project-template.flaskBackend.fullname" . }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "project-template.flaskBackend.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.flaskBackend.service.type }}
+  ports:
+  - port: {{ .Values.flaskBackend.service.port }}
+    targetPort: http
+    protocol: TCP
+    name: http
+  - port: {{ .Values.flaskBackend.service.grpcPort }}
+    targetPort: grpc
+    protocol: TCP
+    name: grpc
+  selector:
+    {{- include "project-template.flaskBackend.selectorLabels" . | nindent 4 }}
+{{- end }}

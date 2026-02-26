@@ -1,0 +1,9 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: project-template
+  labels:
+    app.kubernetes.io/name: project-template
+    app.kubernetes.io/managed-by: kustomize
+    environment: development

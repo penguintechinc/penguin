@@ -1,0 +1,19 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: project-template-config
+  namespace: project-template
+  labels:
+    app.kubernetes.io/name: project-template
+    app.kubernetes.io/managed-by: kustomize
+data:
+  LOG_LEVEL: "INFO"
+  DB_TYPE: "postgres"
+  DB_HOST: "postgres.project-template.svc.cluster.local"
+  DB_PORT: "5432"
+  DB_NAME: "project_template"
+  REDIS_HOST: "redis.project-template.svc.cluster.local"
+  REDIS_PORT: "6379"
+  LICENSE_SERVER_URL: "https://license.penguintech.io"
+  RELEASE_MODE: "false"

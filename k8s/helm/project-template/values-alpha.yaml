@@ -1,0 +1,215 @@
+# Alpha environment values for project-template
+# Local development/testing on microk8s
+
+namespace: project-template-alpha
+namespaceCreate: true
+
+# Flask Backend - Alpha Configuration
+flaskBackend:
+  enabled: true
+  image:
+    repository: project-template/flask-backend
+    tag: latest
+    pullPolicy: Never  # Use local microk8s images
+  replicaCount: 1
+  resources:
+    limits:
+      cpu: 200m
+      memory: 256Mi
+    requests:
+      cpu: 100m
+      memory: 128Mi
+  env:
+    - name: FLASK_ENV
+      value: development
+    - name: FLASK_APP
+      value: app.py
+    - name: PORT
+      value: "5000"
+    - name: GRPC_PORT
+      value: "50051"
+
+# Go Backend - Alpha Configuration
+goBackend:
+  enabled: true
+  image:
+    repository: project-template/go-backend
+    tag: latest
+    pullPolicy: Never  # Use local microk8s images
+  replicaCount: 1
+  resources:
+    limits:
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 100m
+      memory: 128Mi
+  env:
+    - name: PORT
+      value: "8080"
+    - name: GRPC_PORT
+      value: "50052"
+    - name: GO_ENV
+      value: development
+
+# WebUI - Alpha Configuration
+webui:
+  enabled: true
+  image:
+    repository: project-template/webui
+    tag: latest
+    pullPolicy: Never  # Use local microk8s images
+  replicaCount: 1
+  resources:
+    limits:
+      cpu: 150m
+      memory: 256Mi
+    requests:
+      cpu: 50m
+      memory: 128Mi
+  env:
+    - name: PORT
+      value: "3000"
+    - name: REACT_APP_FLASK_API_URL
+      value: http://project-template-flask-backend:5000
+    - name: REACT_APP_GO_API_URL
+      value: http://project-template-go-backend:8080
+
+# PostgreSQL - Alpha Configuration
+postgresql:
+  enabled: true
+  auth:
+    username: alpha_user
+    password: alpha_password
+    database: alpha_db
+  primary:
+    persistence:
+      enabled: false  # Use emptyDir for alpha
+    resources:
+      limits:
+        cpu: 200m
+        memory: 512Mi
+      requests:
+        cpu: 100m
+        memory: 256Mi
+  metrics:
+    enabled: false
+
+# Redis - Alpha Configuration
+redis:
+  enabled: true
+  auth:
+    enabled: true
+    password: alpha_redis_password
+  master:
+    persistence:
+      enabled: false  # Use emptyDir for alpha
+    resources:
+      limits:
+        cpu: 200m
+        memory: 256Mi
+      requests:
+        cpu: 50m
+        memory: 128Mi
+  metrics:
+    enabled: false
+
+# Ingress - Alpha (.localhost.local for microk8s)
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
+  hosts:
+    - host: project-template.localhost.local
+      paths:
+        - path: /api/v1
+          pathType: Prefix
+          backend:
+            service:
+              name: project-template-flask-backend
+              port: 5000
+        - path: /api/v2
+          pathType: Prefix
+          backend:
+            service:
+              name: project-template-go-backend
+              port: 8080
+        - path: /
+          pathType: Prefix
+          backend:
+            service:
+              name: project-template-webui
+              port: 3000
+
+# Autoscaling - Disabled for Alpha
+autoscaling:
+  enabled: false
+  flaskBackend:
+    enabled: false
+  goBackend:
+    enabled: false
+  webui:
+    enabled: false
+
+# Monitoring - Disabled for Alpha
+monitoring:
+  enabled: false
+
+# Network Policy - Disabled for Alpha
+networkPolicy:
+  enabled: false
+
+# Service Account
+serviceAccount:
+  create: true
+  name: project-template-alpha-sa
+
+# Shared Configuration - Alpha
+config:
+  # Database settings
+  DB_HOST: project-template-postgresql
+  DB_PORT: "5432"
+  DB_NAME: alpha_db
+  DB_USER: alpha_user
+  DB_POOL_SIZE: "5"
+  DB_MAX_OVERFLOW: "10"
+
+  # Redis settings
+  REDIS_HOST: project-template-redis-master
+  REDIS_PORT: "6379"
+  REDIS_DB: "0"
+
+  # Application settings
+  LOG_LEVEL: debug
+  LOG_FORMAT: text
+  ENVIRONMENT: alpha
+
+  # License server
+  LICENSE_SERVER_URL: http://localhost:8000
+  LICENSE_CHECK_INTERVAL: "7200"
+
+  # Feature flags
+  ENABLE_METRICS: "false"
+  ENABLE_TRACING: "false"
+  ENABLE_DEBUG_ENDPOINTS: "true"
+
+  # API settings
+  API_TIMEOUT: "60"
+  API_RATE_LIMIT: "1000"
+
+  # CORS settings
+  CORS_ALLOWED_ORIGINS: http://project-template.localhost.local
+
+  # Session settings
+  SESSION_TIMEOUT: "7200"
+  SESSION_COOKIE_SECURE: "false"
+
+# Secrets - Alpha (development values)
+secrets:
+  SECRET_KEY: alpha-dev-secret-key
+  DB_PASSWORD: alpha_password
+  REDIS_PASSWORD: alpha_redis_password
+  LICENSE_KEY: alpha-dev-license
+  JWT_SECRET: alpha-jwt-secret
+  API_KEY: alpha-api-key

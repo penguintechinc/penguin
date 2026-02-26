@@ -1,0 +1,45 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "project-template.configMapName" . }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "project-template.labels" . | nindent 4 }}
+data:
+  # Database settings
+  DB_HOST: {{ include "project-template.postgresql.host" . | quote }}
+  DB_PORT: {{ .Values.config.DB_PORT | quote }}
+  DB_NAME: {{ .Values.config.DB_NAME | quote }}
+  DB_USER: {{ .Values.config.DB_USER | quote }}
+  DB_POOL_SIZE: {{ .Values.config.DB_POOL_SIZE | quote }}
+  DB_MAX_OVERFLOW: {{ .Values.config.DB_MAX_OVERFLOW | quote }}
+
+  # Redis settings
+  REDIS_HOST: {{ include "project-template.redis.host" . | quote }}
+  REDIS_PORT: {{ .Values.config.REDIS_PORT | quote }}
+  REDIS_DB: {{ .Values.config.REDIS_DB | quote }}
+
+  # Application settings
+  LOG_LEVEL: {{ .Values.config.LOG_LEVEL | quote }}
+  LOG_FORMAT: {{ .Values.config.LOG_FORMAT | quote }}
+  ENVIRONMENT: {{ .Values.config.ENVIRONMENT | quote }}
+
+  # License server
+  LICENSE_SERVER_URL: {{ .Values.config.LICENSE_SERVER_URL | quote }}
+  LICENSE_CHECK_INTERVAL: {{ .Values.config.LICENSE_CHECK_INTERVAL | quote }}
+
+  # Feature flags
+  ENABLE_METRICS: {{ .Values.config.ENABLE_METRICS | quote }}
+  ENABLE_TRACING: {{ .Values.config.ENABLE_TRACING | quote }}
+  ENABLE_DEBUG_ENDPOINTS: {{ .Values.config.ENABLE_DEBUG_ENDPOINTS | quote }}
+
+  # API settings
+  API_TIMEOUT: {{ .Values.config.API_TIMEOUT | quote }}
+  API_RATE_LIMIT: {{ .Values.config.API_RATE_LIMIT | quote }}
+
+  # CORS settings
+  CORS_ALLOWED_ORIGINS: {{ .Values.config.CORS_ALLOWED_ORIGINS | quote }}
+
+  # Session settings
+  SESSION_TIMEOUT: {{ .Values.config.SESSION_TIMEOUT | quote }}
+  SESSION_COOKIE_SECURE: {{ .Values.config.SESSION_COOKIE_SECURE | quote }}

@@ -1,0 +1,171 @@
+replicaCount: 3
+
+image:
+  repository: project-template/flask-backend
+  pullPolicy: IfNotPresent
+  tag: latest
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+podAnnotations: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  fsGroup: 1000
+
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+  readOnlyRootFilesystem: true
+
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 5000
+  annotations: {}
+
+ingress:
+  enabled: false
+  className: "nginx"
+  annotations: {}
+  hosts:
+    - host: api.project-template.local
+      paths:
+        - path: /api/v1
+          pathType: Prefix
+  tls: []
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+  requests:
+    cpu: 125m
+    memory: 256Mi
+
+autoscaling:
+  enabled: true
+  minReplicas: 3
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}
+
+env:
+  - name: FLASK_ENV
+    value: "production"
+  - name: FLASK_APP
+    value: "app:create_app()"
+  - name: SECRET_KEY
+    valueFrom:
+      secretKeyRef:
+        name: flask-backend-secret
+        key: secret-key
+  - name: SECURITY_PASSWORD_SALT
+    valueFrom:
+      secretKeyRef:
+        name: flask-backend-secret
+        key: password-salt
+  - name: DB_TYPE
+    valueFrom:
+      configMapKeyRef:
+        name: flask-backend-config
+        key: db-type
+  - name: DB_HOST
+    valueFrom:
+      configMapKeyRef:
+        name: flask-backend-config
+        key: db-host
+  - name: DB_PORT
+    valueFrom:
+      configMapKeyRef:
+        name: flask-backend-config
+        key: db-port
+  - name: DB_NAME
+    valueFrom:
+      configMapKeyRef:
+        name: flask-backend-config
+        key: db-name
+  - name: DB_USER
+    valueFrom:
+      secretKeyRef:
+        name: flask-backend-secret
+        key: db-user
+  - name: DB_PASS
+    valueFrom:
+      secretKeyRef:
+        name: flask-backend-secret
+        key: db-pass
+  - name: DB_POOL_SIZE
+    valueFrom:
+      configMapKeyRef:
+        name: flask-backend-config
+        key: db-pool-size
+  - name: LICENSE_KEY
+    valueFrom:
+      secretKeyRef:
+        name: flask-backend-secret
+        key: license-key
+  - name: LICENSE_SERVER_URL
+    valueFrom:
+      configMapKeyRef:
+        name: flask-backend-config
+        key: license-server-url
+  - name: RELEASE_MODE
+    valueFrom:
+      configMapKeyRef:
+        name: flask-backend-config
+        key: release-mode
+
+livenessProbe:
+  httpGet:
+    path: /healthz
+    port: 5000
+  initialDelaySeconds: 30
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+readinessProbe:
+  httpGet:
+    path: /healthz
+    port: 5000
+  initialDelaySeconds: 10
+  periodSeconds: 5
+  timeoutSeconds: 3
+  failureThreshold: 2
+
+volumeMounts: []
+
+volumes: []
+
+configMapData:
+  db-type: "postgres"
+  db-host: "postgres"
+  db-port: "5432"
+  db-name: "app_db"
+  db-pool-size: "10"
+  license-server-url: "https://license.penguintech.io"
+  release-mode: "false"
+
+secretData:
+  secret-key: "changeme-in-production"
+  password-salt: "changeme-in-production"
+  db-user: "app_user"
+  db-pass: "changeme-in-production"
+  license-key: "PENG-XXXX-XXXX-XXXX-XXXX-ABCD"
