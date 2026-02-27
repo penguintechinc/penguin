@@ -8,7 +8,7 @@
 VERSION := $(shell cat ../../.version 2>/dev/null || echo "0.1.0")
 BUILD_DIR := bin
 PLUGINS_DIR := plugins
-MODULES := vpn openziti dns ntp nest articdbm
+MODULES := vpn openziti dns ntp nest articdbm killkrill skauswatch waddleperf
 LDFLAGS := -ldflags "-X main.version=$(VERSION)"
 
 help: ## Show available targets

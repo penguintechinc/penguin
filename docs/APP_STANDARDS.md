@@ -18,13 +18,22 @@
 ## Architecture Overview
 
 ### Core Services
-[Document the specific containers/services used in this application]
 
-**Example:**
-- **flask-backend**: User management, order processing, API
-- **go-backend**: Real-time notifications, high-performance data processing
-- **webui**: Admin dashboard, customer portal
-- **connector**: Third-party integrations (payment processing, shipping, etc.)
+**Desktop Client** (`services/desktop/`): Cross-platform desktop application with plugin module architecture.
+
+#### Desktop Plugin Modules
+
+| Module | Binary | Description |
+|--------|--------|-------------|
+| VPN | `penguin-mod-vpn` | WireGuard VPN client — tunnel management, connect/disconnect, status |
+| OpenZiti | `penguin-mod-openziti` | OpenZiti zero-trust networking integration |
+| DNS | `penguin-mod-dns` | DNS-over-HTTPS client with local forwarding |
+| NTP | `penguin-mod-ntp` | NTP time synchronization |
+| Nest | `penguin-mod-nest` | Nest service integration |
+| ArticDBM | `penguin-mod-articdbm` | Database proxy management via ArticDBM |
+| KillKrill | `penguin-mod-killkrill` | Logging & metrics agent — log queue management, metric submission, flush control |
+| SkaUsWatch | `penguin-mod-skauswatch` | EDR client — threat detection, scan management, quarantine actions |
+| WaddlePerf | `penguin-mod-waddleperf` | Network performance testing — HTTP/TCP/UDP/ICMP tests, scheduled execution, result upload |
 
 ### Technology Choices
 [Document specific tech stack decisions and rationale]
