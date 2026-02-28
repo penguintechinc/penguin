@@ -3,7 +3,6 @@ package ntp
 import (
 	"context"
 	"fmt"
-	"sync"
 
 	"github.com/penguintechinc/penguin/services/desktop/internal/module"
 	"github.com/penguintechinc/penguin/services/desktop/pkg/clischema"
@@ -14,10 +13,8 @@ import (
 
 // Module implements the NTP module for the desktop client.
 type Module struct {
+	module.BaseModule
 	client     *Client
-	logger     *logrus.Logger
-	mu         sync.RWMutex
-	started    bool
 	lastSync   string
 	lastOffset string
 	lastServer string
@@ -31,9 +28,9 @@ func (m *Module) Description() string { return "Network Time Protocol client for
 func (m *Module) Version() string     { return "0.1.0" }
 
 func (m *Module) Init(ctx context.Context, deps module.Dependencies) error {
-	m.logger = deps.Logger.(*logrus.Logger)
-	m.logger.WithField("module", m.Name()).Debug("Initializing NTP module")
-	m.client = NewClient(nil, m.logger)
+	m.Logger = deps.Logger.(*logrus.Logger)
+	m.Logger.WithField("module", m.Name()).Debug("Initializing NTP module")
+	m.client = NewClient(nil, m.Logger)
 	m.lastSync = "Never"
 	m.lastOffset = "-"
 	m.lastServer = "-"
@@ -42,29 +39,23 @@ func (m *Module) Init(ctx context.Context, deps module.Dependencies) error {
 }
 
 func (m *Module) Start(ctx context.Context) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.started = true
-	m.logger.WithField("module", m.Name()).Info("NTP module started")
+	m.MarkStarted()
+	m.Logger.WithField("module", m.Name()).Info("NTP module started")
 	return nil
 }
 
 func (m *Module) Stop(ctx context.Context) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
 	if m.client != nil {
 		m.client.Close()
 	}
-	m.started = false
-	m.logger.WithField("module", m.Name()).Info("NTP module stopped")
+	m.MarkStopped()
+	m.Logger.WithField("module", m.Name()).Info("NTP module stopped")
 	return nil
 }
 
 func (m *Module) HealthCheck(ctx context.Context) module.HealthStatus {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	if !m.started {
-		return module.HealthStatus{State: module.HealthUnknown, Message: "module not started"}
+	if !m.IsStarted() {
+		return m.NotStartedStatus()
 	}
 	if m.client != nil {
 		return module.HealthStatus{
@@ -79,8 +70,8 @@ func (m *Module) HealthCheck(ctx context.Context) module.HealthStatus {
 // --- PluginModule interface ---
 
 func (m *Module) GetGUIPanel(ctx context.Context) (*modulepb.GUIPanel, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	m.RLock()
+	defer m.RUnlock()
 
 	return uischema.Panel(
 		uischema.VBox(
@@ -99,16 +90,16 @@ func (m *Module) HandleGUIEvent(ctx context.Context, event *modulepb.GUIEvent) (
 	if event.WidgetID == "ntp-sync-btn" && m.client != nil {
 		resp, err := m.client.Query(ctx)
 		if err != nil {
-			m.mu.Lock()
+			m.Lock()
 			m.lastSync = "Error: " + err.Error()
-			m.mu.Unlock()
+			m.Unlock()
 		} else {
-			m.mu.Lock()
+			m.Lock()
 			m.lastSync = resp.Time.Format("15:04:05 MST")
 			m.lastOffset = fmt.Sprintf("%v", resp.Offset)
 			m.lastServer = resp.Server
 			m.lastStrat = fmt.Sprintf("%d", resp.Stratum)
-			m.mu.Unlock()
+			m.Unlock()
 		}
 	}
 	return m.GetGUIPanel(ctx)
@@ -128,15 +119,15 @@ func (m *Module) ExecuteCLICommand(ctx context.Context, req *modulepb.CLICommand
 	switch req.CommandPath {
 	case "ntp sync":
 		if m.client == nil {
-			return &modulepb.CLICommandResponse{Stderr: "NTP client not initialized\n", ExitCode: 1}, nil
+			return modulepb.ErrorResponse(fmt.Errorf("NTP client not initialized")), nil
 		}
 		resp, err := m.client.Query(ctx)
 		if err != nil {
-			return &modulepb.CLICommandResponse{Stderr: fmt.Sprintf("sync failed: %v\n", err), ExitCode: 1}, nil
+			return modulepb.ErrorResponse(err), nil
 		}
 		out := fmt.Sprintf("Time:    %s\nOffset:  %v\nDelay:   %v\nServer:  %s\nStratum: %d\n",
 			resp.Time.Format("2006-01-02 15:04:05 MST"), resp.Offset, resp.Delay, resp.Server, resp.Stratum)
-		return &modulepb.CLICommandResponse{Stdout: out}, nil
+		return modulepb.OKResponse(out), nil
 
 	case "ntp status":
 		health := m.HealthCheck(ctx)
@@ -147,7 +138,7 @@ func (m *Module) ExecuteCLICommand(ctx context.Context, req *modulepb.CLICommand
 				out += fmt.Sprintf("  - %s\n", s)
 			}
 		}
-		return &modulepb.CLICommandResponse{Stdout: out}, nil
+		return modulepb.OKResponse(out), nil
 
 	case "ntp health":
 		health := m.HealthCheck(ctx)
@@ -155,10 +146,10 @@ func (m *Module) ExecuteCLICommand(ctx context.Context, req *modulepb.CLICommand
 		for k, v := range health.Details {
 			out += fmt.Sprintf("%s: %s\n", k, v)
 		}
-		return &modulepb.CLICommandResponse{Stdout: out}, nil
+		return modulepb.OKResponse(out), nil
 
 	default:
-		return &modulepb.CLICommandResponse{Stderr: fmt.Sprintf("unknown command: %s\n", req.CommandPath), ExitCode: 1}, nil
+		return modulepb.UnknownCommandResponse(req.CommandPath), nil
 	}
 }
 

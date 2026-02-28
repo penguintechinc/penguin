@@ -3,7 +3,6 @@ package vpn
 import (
 	"context"
 	"fmt"
-	"sync"
 
 	"github.com/penguintechinc/penguin/services/desktop/internal/module"
 	"github.com/penguintechinc/penguin/services/desktop/pkg/clischema"
@@ -13,10 +12,8 @@ import (
 )
 
 type Module struct {
-	client  *Client
-	logger  *logrus.Logger
-	mu      sync.RWMutex
-	started bool
+	module.BaseModule
+	client *Client
 }
 
 func New() *Module {
@@ -29,35 +26,29 @@ func (m *Module) Description() string { return "WireGuard VPN client for secure 
 func (m *Module) Version() string     { return "0.1.0" }
 
 func (m *Module) Init(ctx context.Context, deps module.Dependencies) error {
-	m.logger = deps.Logger.(*logrus.Logger)
-	m.client = NewClient(deps, m.logger)
+	m.Logger = deps.Logger.(*logrus.Logger)
+	m.client = NewClient(deps, m.Logger)
 	return nil
 }
 
 func (m *Module) Start(ctx context.Context) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.started = true
-	m.logger.Info("VPN module started")
+	m.MarkStarted()
+	m.Logger.Info("VPN module started")
 	return nil
 }
 
 func (m *Module) Stop(ctx context.Context) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
 	if m.client != nil && m.client.IsConnected() {
 		m.client.Disconnect(ctx)
 	}
-	m.started = false
-	m.logger.Info("VPN module stopped")
+	m.MarkStopped()
+	m.Logger.Info("VPN module stopped")
 	return nil
 }
 
 func (m *Module) HealthCheck(ctx context.Context) module.HealthStatus {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	if !m.started {
-		return module.HealthStatus{State: module.HealthUnknown, Message: "not started"}
+	if !m.IsStarted() {
+		return m.NotStartedStatus()
 	}
 	if m.client == nil {
 		return module.HealthStatus{State: module.HealthUnhealthy, Message: "client not initialized"}
@@ -146,15 +137,15 @@ func (m *Module) ExecuteCLICommand(ctx context.Context, req *modulepb.CLICommand
 	switch req.CommandPath {
 	case "vpn connect":
 		if err := m.client.Connect(ctx); err != nil {
-			return &modulepb.CLICommandResponse{Stderr: err.Error() + "\n", ExitCode: 1}, nil
+			return modulepb.ErrorResponse(err), nil
 		}
-		return &modulepb.CLICommandResponse{Stdout: "VPN connected\n"}, nil
+		return modulepb.OKResponse("VPN connected\n"), nil
 
 	case "vpn disconnect":
 		if err := m.client.Disconnect(ctx); err != nil {
-			return &modulepb.CLICommandResponse{Stderr: err.Error() + "\n", ExitCode: 1}, nil
+			return modulepb.ErrorResponse(err), nil
 		}
-		return &modulepb.CLICommandResponse{Stdout: "VPN disconnected\n"}, nil
+		return modulepb.OKResponse("VPN disconnected\n"), nil
 
 	case "vpn status":
 		if m.client.IsConnected() {
@@ -162,15 +153,12 @@ func (m *Module) ExecuteCLICommand(ctx context.Context, req *modulepb.CLICommand
 			for k, v := range m.client.StatusDetails() {
 				out += fmt.Sprintf("  %s: %s\n", k, v)
 			}
-			return &modulepb.CLICommandResponse{Stdout: out}, nil
+			return modulepb.OKResponse(out), nil
 		}
-		return &modulepb.CLICommandResponse{Stdout: "VPN: Disconnected\n"}, nil
+		return modulepb.OKResponse("VPN: Disconnected\n"), nil
 
 	default:
-		return &modulepb.CLICommandResponse{
-			Stderr:   fmt.Sprintf("unknown command: %s\n", req.CommandPath),
-			ExitCode: 1,
-		}, nil
+		return modulepb.UnknownCommandResponse(req.CommandPath), nil
 	}
 }
 

@@ -8,7 +8,7 @@
 VERSION := $(shell cat ../../.version 2>/dev/null || echo "0.1.0")
 BUILD_DIR := bin
 PLUGINS_DIR := plugins
-MODULES := vpn openziti dns ntp nest articdbm killkrill skauswatch waddleperf
+MODULES := vpn openziti dns ntp nest articdbm killkrill skauswatch waddleperf waddlebot
 LDFLAGS := -ldflags "-X main.version=$(VERSION)"
 
 help: ## Show available targets
@@ -20,11 +20,11 @@ help: ## Show available targets
 
 build: build-host build-modules ## Build everything (host + all modules)
 
-build-host: ## Build host binaries (penguin-desktop, penguin-cli)
+build-host: ## Build host binaries (penguin-desktop, pcli)
 	@echo "Building host binaries..."
 	@mkdir -p $(BUILD_DIR)
 	go build $(LDFLAGS) -o $(BUILD_DIR)/penguin-desktop ./cmd/penguin-desktop/
-	go build $(LDFLAGS) -o $(BUILD_DIR)/penguin-cli ./cmd/penguin-cli/
+	go build $(LDFLAGS) -o $(BUILD_DIR)/pcli ./cmd/pcli/
 	@echo "Host binaries built: $(BUILD_DIR)/"
 
 build-modules: ## Build all module plugin binaries

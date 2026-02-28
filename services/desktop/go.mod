@@ -1,6 +1,8 @@
 module github.com/penguintechinc/penguin/services/desktop
 
-go 1.23.1
+go 1.24.0
+
+toolchain go1.24.4
 
 require (
 	fyne.io/fyne/v2 v2.4.3
@@ -8,6 +10,7 @@ require (
 	github.com/golang-jwt/jwt/v5 v5.2.0
 	github.com/hashicorp/go-hclog v1.6.3
 	github.com/hashicorp/go-plugin v1.6.2
+	github.com/penguintechinc/penguin-libs/packages/penguin-desktop v0.0.0-00010101000000-000000000000
 	github.com/sirupsen/logrus v1.9.3
 	github.com/spf13/cobra v1.8.0
 	github.com/spf13/pflag v1.0.5
@@ -60,6 +63,7 @@ require (
 	github.com/subosito/gotenv v1.6.0 // indirect
 	github.com/tevino/abool v1.2.0 // indirect
 	github.com/yuin/goldmark v1.5.5 // indirect
+	github.com/yuin/gopher-lua v1.1.1 // indirect
 	go.uber.org/atomic v1.9.0 // indirect
 	go.uber.org/multierr v1.9.0 // indirect
 	golang.org/x/exp v0.0.0-20230905200255-921286631fa9 // indirect
@@ -75,3 +79,5 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	honnef.co/go/js/dom v0.0.0-20210725211120-f030747120f2 // indirect
 )
+
+replace github.com/penguintechinc/penguin-libs/packages/penguin-desktop => ../../../penguin-libs/packages/penguin-desktop

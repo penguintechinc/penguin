@@ -3,7 +3,6 @@ package openziti
 import (
 	"context"
 	"fmt"
-	"sync"
 
 	"github.com/penguintechinc/penguin/services/desktop/internal/module"
 	"github.com/penguintechinc/penguin/services/desktop/pkg/clischema"
@@ -13,10 +12,8 @@ import (
 )
 
 type Module struct {
+	module.BaseModule
 	provider *Provider
-	logger   *logrus.Logger
-	mu       sync.RWMutex
-	started  bool
 }
 
 func New() *Module              { return &Module{} }
@@ -26,35 +23,29 @@ func (m *Module) Description() string { return "Zero-trust overlay network acces
 func (m *Module) Version() string     { return "0.1.0" }
 
 func (m *Module) Init(ctx context.Context, deps module.Dependencies) error {
-	m.logger = deps.Logger.(*logrus.Logger)
-	m.provider = NewProvider(deps.DataDir, m.logger)
+	m.Logger = deps.Logger.(*logrus.Logger)
+	m.provider = NewProvider(deps.DataDir, m.Logger)
 	return nil
 }
 
 func (m *Module) Start(ctx context.Context) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.started = true
-	m.logger.Info("OpenZiti module started")
+	m.MarkStarted()
+	m.Logger.Info("OpenZiti module started")
 	return nil
 }
 
 func (m *Module) Stop(ctx context.Context) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
 	if m.provider != nil {
 		m.provider.Disconnect()
 	}
-	m.started = false
-	m.logger.Info("OpenZiti module stopped")
+	m.MarkStopped()
+	m.Logger.Info("OpenZiti module stopped")
 	return nil
 }
 
 func (m *Module) HealthCheck(ctx context.Context) module.HealthStatus {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	if !m.started {
-		return module.HealthStatus{State: module.HealthUnknown, Message: "not started"}
+	if !m.IsStarted() {
+		return m.NotStartedStatus()
 	}
 	if m.provider == nil {
 		return module.HealthStatus{State: module.HealthUnhealthy, Message: "provider not initialized"}
@@ -140,9 +131,9 @@ func (m *Module) ExecuteCLICommand(ctx context.Context, req *modulepb.CLICommand
 			jwtFile = req.Args[0]
 		}
 		if err := m.provider.Enroll(ctx, jwtFile); err != nil {
-			return &modulepb.CLICommandResponse{Stderr: err.Error() + "\n", ExitCode: 1}, nil
+			return modulepb.ErrorResponse(err), nil
 		}
-		return &modulepb.CLICommandResponse{Stdout: "OpenZiti enrollment initiated\n"}, nil
+		return modulepb.OKResponse("OpenZiti enrollment initiated\n"), nil
 
 	case "ziti status":
 		if m.provider.IsConnected() {
@@ -155,41 +146,41 @@ func (m *Module) ExecuteCLICommand(ctx context.Context, req *modulepb.CLICommand
 					out += fmt.Sprintf("  - %s\n", s)
 				}
 			}
-			return &modulepb.CLICommandResponse{Stdout: out}, nil
+			return modulepb.OKResponse(out), nil
 		}
-		return &modulepb.CLICommandResponse{Stdout: "OpenZiti: Disconnected\n"}, nil
+		return modulepb.OKResponse("OpenZiti: Disconnected\n"), nil
 
 	case "ziti connect":
 		if err := m.provider.Connect(ctx); err != nil {
-			return &modulepb.CLICommandResponse{Stderr: fmt.Sprintf("failed to connect: %v\n", err), ExitCode: 1}, nil
+			return modulepb.ErrorResponse(err), nil
 		}
-		return &modulepb.CLICommandResponse{Stdout: "OpenZiti connected successfully\n"}, nil
+		return modulepb.OKResponse("OpenZiti connected successfully\n"), nil
 
 	case "ziti disconnect":
 		if err := m.provider.Disconnect(); err != nil {
-			return &modulepb.CLICommandResponse{Stderr: fmt.Sprintf("failed to disconnect: %v\n", err), ExitCode: 1}, nil
+			return modulepb.ErrorResponse(err), nil
 		}
-		return &modulepb.CLICommandResponse{Stdout: "OpenZiti disconnected\n"}, nil
+		return modulepb.OKResponse("OpenZiti disconnected\n"), nil
 
 	case "ziti services":
 		services := m.provider.Services()
 		if len(services) == 0 {
-			return &modulepb.CLICommandResponse{Stdout: "No services available\n"}, nil
+			return modulepb.OKResponse("No services available\n"), nil
 		}
 		out := "Available OpenZiti Services:\n"
 		for _, s := range services {
 			out += fmt.Sprintf("  - %s\n", s)
 		}
-		return &modulepb.CLICommandResponse{Stdout: out}, nil
+		return modulepb.OKResponse(out), nil
 
 	case "ziti refresh":
 		if err := m.provider.RefreshServices(ctx); err != nil {
-			return &modulepb.CLICommandResponse{Stderr: fmt.Sprintf("failed to refresh services: %v\n", err), ExitCode: 1}, nil
+			return modulepb.ErrorResponse(err), nil
 		}
-		return &modulepb.CLICommandResponse{Stdout: "Services refreshed\n"}, nil
+		return modulepb.OKResponse("Services refreshed\n"), nil
 
 	default:
-		return &modulepb.CLICommandResponse{Stderr: fmt.Sprintf("unknown command: %s\n", req.CommandPath), ExitCode: 1}, nil
+		return modulepb.UnknownCommandResponse(req.CommandPath), nil
 	}
 }
 

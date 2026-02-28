@@ -3,7 +3,6 @@ package waddleperf
 import (
 	"context"
 	"fmt"
-	"sync"
 
 	"github.com/penguintechinc/penguin/services/desktop/internal/module"
 	"github.com/penguintechinc/penguin/services/desktop/pkg/clischema"
@@ -14,11 +13,9 @@ import (
 
 // Module implements the WaddlePerf network testing client as a PluginModule.
 type Module struct {
+	module.BaseModule
 	client *Client
 	runner *TestRunner
-	logger *logrus.Logger
-	mu     sync.RWMutex
-	started bool
 }
 
 func New() *Module              { return &Module{} }
@@ -28,36 +25,30 @@ func (m *Module) Description() string { return "Network performance testing clie
 func (m *Module) Version() string     { return "0.1.0" }
 
 func (m *Module) Init(ctx context.Context, deps module.Dependencies) error {
-	m.logger = deps.Logger.(*logrus.Logger)
+	m.Logger = deps.Logger.(*logrus.Logger)
 	return nil
 }
 
 func (m *Module) Start(ctx context.Context) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.started = true
+	m.MarkStarted()
 	if m.runner != nil {
 		m.runner.Start()
 	}
-	m.logger.Info("WaddlePerf module started")
+	m.Logger.Info("WaddlePerf module started")
 	return nil
 }
 
 func (m *Module) Stop(ctx context.Context) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
 	if m.runner != nil {
 		m.runner.Stop()
 	}
-	m.started = false
+	m.MarkStopped()
 	return nil
 }
 
 func (m *Module) HealthCheck(ctx context.Context) module.HealthStatus {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	if !m.started {
-		return module.HealthStatus{State: module.HealthUnknown, Message: "not started"}
+	if !m.IsStarted() {
+		return m.NotStartedStatus()
 	}
 	if m.client == nil {
 		return module.HealthStatus{State: module.HealthDegraded, Message: "client not configured"}
@@ -151,7 +142,7 @@ func (m *Module) GetCLICommands(ctx context.Context) (*modulepb.CLICommandList, 
 
 func (m *Module) ExecuteCLICommand(ctx context.Context, req *modulepb.CLICommandRequest) (*modulepb.CLICommandResponse, error) {
 	if m.client == nil {
-		return &modulepb.CLICommandResponse{Stderr: "waddleperf client not configured\n", ExitCode: 1}, nil
+		return modulepb.ErrorResponse(fmt.Errorf("waddleperf client not configured")), nil
 	}
 
 	switch req.CommandPath {
@@ -165,7 +156,7 @@ func (m *Module) ExecuteCLICommand(ctx context.Context, req *modulepb.CLICommand
 			target = req.Args[0]
 		}
 		if target == "" {
-			return &modulepb.CLICommandResponse{Stderr: "target required (--target URL or host:port)\n", ExitCode: 1}, nil
+			return modulepb.ErrorResponse(fmt.Errorf("target required (--target URL or host:port)")), nil
 		}
 		protocol := req.Flags["protocol"]
 		if protocol == "" {
@@ -180,7 +171,7 @@ func (m *Module) ExecuteCLICommand(ctx context.Context, req *modulepb.CLICommand
 			result.Latency, result.DNSLookup, result.TCPConnect,
 			result.TLSHandshake, result.TTFB, result.TotalTime,
 			result.Jitter, result.PacketLoss)
-		return &modulepb.CLICommandResponse{Stdout: out}, nil
+		return modulepb.OKResponse(out), nil
 
 	case "waddleperf results":
 		limitStr := req.Flags["limit"]
@@ -190,26 +181,26 @@ func (m *Module) ExecuteCLICommand(ctx context.Context, req *modulepb.CLICommand
 		}
 		results, err := m.client.GetRecentResults(ctx, limit)
 		if err != nil {
-			return &modulepb.CLICommandResponse{Stderr: err.Error() + "\n", ExitCode: 1}, nil
+			return modulepb.ErrorResponse(err), nil
 		}
 		if len(results) == 0 {
-			return &modulepb.CLICommandResponse{Stdout: "No recent results\n"}, nil
+			return modulepb.OKResponse("No recent results\n"), nil
 		}
 		out := fmt.Sprintf("%-6s %-30s %-8s %10s %8s %8s\n", "TYPE", "TARGET", "STATUS", "LATENCY", "JITTER", "LOSS")
 		for _, r := range results {
 			out += fmt.Sprintf("%-6s %-30s %-8s %8.2fms %6.2fms %6.2f%%\n",
 				r.Type, r.Target, r.Status, r.Latency, r.Jitter, r.PacketLoss)
 		}
-		return &modulepb.CLICommandResponse{Stdout: out}, nil
+		return modulepb.OKResponse(out), nil
 
 	case "waddleperf status":
 		testOK, managerOK := m.client.HealthCheck(ctx)
 		out := fmt.Sprintf("Test Server:    %s\nManager Server: %s\n",
 			boolStatus(testOK), boolStatus(managerOK))
-		return &modulepb.CLICommandResponse{Stdout: out}, nil
+		return modulepb.OKResponse(out), nil
 
 	default:
-		return &modulepb.CLICommandResponse{Stderr: fmt.Sprintf("unknown command: %s\n", req.CommandPath), ExitCode: 1}, nil
+		return modulepb.UnknownCommandResponse(req.CommandPath), nil
 	}
 }
 

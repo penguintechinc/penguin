@@ -3,7 +3,6 @@ package articdbm
 import (
 	"context"
 	"fmt"
-	"sync"
 
 	"github.com/penguintechinc/penguin/services/desktop/internal/module"
 	"github.com/penguintechinc/penguin/services/desktop/pkg/clischema"
@@ -13,42 +12,34 @@ import (
 )
 
 type Module struct {
-	client  *Client
-	logger  *logrus.Logger
-	mu      sync.RWMutex
-	started bool
+	module.BaseModule
+	client *Client
 }
 
-func New() *Module              { return &Module{} }
+func New() *Module                    { return &Module{} }
 func (m *Module) Name() string        { return "articdbm" }
 func (m *Module) DisplayName() string { return "ArticDBM" }
 func (m *Module) Description() string { return "Database proxy management via ArticDBM" }
 func (m *Module) Version() string     { return "0.1.0" }
 
 func (m *Module) Init(ctx context.Context, deps module.Dependencies) error {
-	m.logger = deps.Logger.(*logrus.Logger)
+	m.Logger = deps.Logger.(*logrus.Logger)
 	return nil
 }
 
 func (m *Module) Start(ctx context.Context) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.started = true
-	m.logger.Info("ArticDBM module started")
+	m.MarkStarted()
+	m.Logger.Info("ArticDBM module started")
 	return nil
 }
 
 func (m *Module) Stop(ctx context.Context) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.started = false
+	m.MarkStopped()
 	return nil
 }
 
 func (m *Module) HealthCheck(ctx context.Context) module.HealthStatus {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	if !m.started {
+	if !m.IsStarted() {
 		return module.HealthStatus{State: module.HealthUnknown, Message: "not started"}
 	}
 	if m.client != nil {
@@ -141,7 +132,7 @@ func (m *Module) ExecuteCLICommand(ctx context.Context, req *modulepb.CLICommand
 		return &modulepb.CLICommandResponse{Stdout: out}, nil
 
 	default:
-		return &modulepb.CLICommandResponse{Stderr: fmt.Sprintf("unknown command: %s\n", req.CommandPath), ExitCode: 1}, nil
+		return modulepb.UnknownCommandResponse(req.CommandPath), nil
 	}
 }
 

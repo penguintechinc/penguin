@@ -3,7 +3,6 @@ package killkrill
 import (
 	"context"
 	"fmt"
-	"sync"
 
 	"github.com/penguintechinc/penguin/services/desktop/internal/module"
 	"github.com/penguintechinc/penguin/services/desktop/pkg/clischema"
@@ -14,10 +13,8 @@ import (
 
 // Module implements the KillKrill logging/metrics agent as a PluginModule.
 type Module struct {
-	client  *Client
-	logger  *logrus.Logger
-	mu      sync.RWMutex
-	started bool
+	module.BaseModule
+	client *Client
 }
 
 func New() *Module              { return &Module{} }
@@ -27,39 +24,33 @@ func (m *Module) Description() string { return "Centralized logging and metrics 
 func (m *Module) Version() string     { return "0.1.0" }
 
 func (m *Module) Init(ctx context.Context, deps module.Dependencies) error {
-	m.logger = deps.Logger.(*logrus.Logger)
+	m.Logger = deps.Logger.(*logrus.Logger)
 	// Client is created lazily when config is available.
 	return nil
 }
 
 func (m *Module) Start(ctx context.Context) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.started = true
+	m.BaseModule.MarkStarted()
 	if m.client != nil {
 		if err := m.client.Connect(ctx); err != nil {
-			m.logger.WithError(err).Warn("killkrill connection failed, will retry on flush")
+			m.Logger.WithError(err).Warn("killkrill connection failed, will retry on flush")
 		}
 	}
-	m.logger.Info("KillKrill module started")
+	m.Logger.Info("KillKrill module started")
 	return nil
 }
 
 func (m *Module) Stop(ctx context.Context) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
 	if m.client != nil {
 		m.client.Disconnect(ctx)
 	}
-	m.started = false
+	m.BaseModule.MarkStopped()
 	return nil
 }
 
 func (m *Module) HealthCheck(ctx context.Context) module.HealthStatus {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	if !m.started {
-		return module.HealthStatus{State: module.HealthUnknown, Message: "not started"}
+	if !m.BaseModule.IsStarted() {
+		return m.BaseModule.NotStartedStatus()
 	}
 	if m.client == nil {
 		return module.HealthStatus{State: module.HealthDegraded, Message: "client not configured"}
@@ -115,7 +106,7 @@ func (m *Module) GetGUIPanel(ctx context.Context) (*modulepb.GUIPanel, error) {
 func (m *Module) HandleGUIEvent(ctx context.Context, event *modulepb.GUIEvent) (*modulepb.GUIPanel, error) {
 	if event.WidgetID == "kk-flush-btn" && m.client != nil {
 		if err := m.client.Flush(ctx); err != nil {
-			m.logger.WithError(err).Warn("manual flush failed")
+			m.Logger.WithError(err).Warn("manual flush failed")
 		}
 	}
 	return m.GetGUIPanel(ctx)
@@ -134,7 +125,7 @@ func (m *Module) GetCLICommands(ctx context.Context) (*modulepb.CLICommandList, 
 
 func (m *Module) ExecuteCLICommand(ctx context.Context, req *modulepb.CLICommandRequest) (*modulepb.CLICommandResponse, error) {
 	if m.client == nil {
-		return &modulepb.CLICommandResponse{Stderr: "killkrill client not configured\n", ExitCode: 1}, nil
+		return modulepb.ErrorResponse(fmt.Errorf("killkrill client not configured")), nil
 	}
 
 	switch req.CommandPath {
@@ -150,16 +141,16 @@ func (m *Module) ExecuteCLICommand(ctx context.Context, req *modulepb.CLICommand
 		}
 		out := fmt.Sprintf("Connection:      %s\nLogs pending:    %d\nMetrics pending: %d\nLast flush:      %s\n",
 			connStr, qs.LogsPending, qs.MetricsPending, lastFlush)
-		return &modulepb.CLICommandResponse{Stdout: out}, nil
+		return modulepb.OKResponse(out), nil
 
 	case "killkrill flush":
 		if err := m.client.Flush(ctx); err != nil {
-			return &modulepb.CLICommandResponse{Stderr: fmt.Sprintf("flush failed: %v\n", err), ExitCode: 1}, nil
+			return modulepb.ErrorResponse(fmt.Errorf("flush failed: %w", err)), nil
 		}
-		return &modulepb.CLICommandResponse{Stdout: "Flush completed successfully\n"}, nil
+		return modulepb.OKResponse("Flush completed successfully\n"), nil
 
 	default:
-		return &modulepb.CLICommandResponse{Stderr: fmt.Sprintf("unknown command: %s\n", req.CommandPath), ExitCode: 1}, nil
+		return modulepb.UnknownCommandResponse(req.CommandPath), nil
 	}
 }
 

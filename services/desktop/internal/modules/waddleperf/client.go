@@ -1,37 +1,50 @@
 package waddleperf
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"time"
 
+	desktop "github.com/penguintechinc/penguin-libs/packages/penguin-desktop"
 	"github.com/sirupsen/logrus"
 )
 
 // Client communicates with WaddlePerf's testServer and managerServer.
 type Client struct {
-	testServerURL string
-	managerURL    string
-	apiKey        string
-	device        DeviceInfo
-	httpClient    *http.Client
-	logger        *logrus.Logger
+	testAPI    *desktop.JSONClient
+	managerAPI *desktop.JSONClient
+	device     DeviceInfo
+	logger     *logrus.Logger
 }
 
 // NewClient creates a WaddlePerf API client.
 func NewClient(testServerURL, managerURL, apiKey string, device DeviceInfo, logger *logrus.Logger) *Client {
+	deviceHeaders := func(r *http.Request) {
+		r.Header.Set("X-Device-Serial", device.Serial)
+		r.Header.Set("X-Device-Hostname", device.Hostname)
+		r.Header.Set("X-Device-OS", device.OS)
+		r.Header.Set("X-Device-OS-Version", device.Version)
+	}
+
+	testAPI := desktop.NewJSONClient(strings.TrimRight(testServerURL, "/"), 60*time.Second)
+	testAPI.ExtraHeaders = deviceHeaders
+	if apiKey != "" {
+		testAPI.GetToken = func() string { return apiKey }
+	}
+
+	managerAPI := desktop.NewJSONClient(strings.TrimRight(managerURL, "/"), 60*time.Second)
+	managerAPI.ExtraHeaders = deviceHeaders
+	if apiKey != "" {
+		managerAPI.GetToken = func() string { return apiKey }
+	}
+
 	return &Client{
-		testServerURL: strings.TrimRight(testServerURL, "/"),
-		managerURL:    strings.TrimRight(managerURL, "/"),
-		apiKey:        apiKey,
-		device:        device,
-		httpClient:    &http.Client{Timeout: 60 * time.Second},
-		logger:        logger,
+		testAPI:    testAPI,
+		managerAPI: managerAPI,
+		device:     device,
+		logger:     logger,
 	}
 }
 
@@ -58,14 +71,14 @@ func (c *Client) RunICMPTest(ctx context.Context, target, protocol string) (*Tes
 // UploadResult sends a test result to the managerServer.
 func (c *Client) UploadResult(ctx context.Context, result TestResult) error {
 	payload := uploadPayload{Result: result, Device: c.device}
-	return c.doJSON(ctx, "POST", c.managerURL+"/api/v1/results/upload", payload, nil)
+	return c.managerAPI.DoJSON(ctx, "POST", "/api/v1/results/upload", payload, nil)
 }
 
 // GetRecentResults retrieves recent test results from the managerServer.
 func (c *Client) GetRecentResults(ctx context.Context, limit int) ([]TestResult, error) {
-	url := fmt.Sprintf("%s/api/v1/statistics/recent?limit=%d", c.managerURL, limit)
+	path := fmt.Sprintf("/api/v1/statistics/recent?limit=%d", limit)
 	var results []TestResult
-	if err := c.doJSON(ctx, "GET", url, nil, &results); err != nil {
+	if err := c.managerAPI.DoJSON(ctx, "GET", path, nil, &results); err != nil {
 		return nil, err
 	}
 	return results, nil
@@ -73,8 +86,8 @@ func (c *Client) GetRecentResults(ctx context.Context, limit int) ([]TestResult,
 
 // HealthCheck verifies connectivity to both testServer and managerServer.
 func (c *Client) HealthCheck(ctx context.Context) (testOK, managerOK bool) {
-	testOK = c.checkHealth(ctx, c.testServerURL+"/health")
-	managerOK = c.checkHealth(ctx, c.managerURL+"/health")
+	testOK = c.checkHealth(ctx, c.testAPI, "/health")
+	managerOK = c.checkHealth(ctx, c.managerAPI, "/health")
 	return
 }
 
@@ -83,67 +96,14 @@ func (c *Client) runTest(ctx context.Context, testType TestType, target, protoco
 		"target":   target,
 		"protocol": protocol,
 	}
-	endpoint := fmt.Sprintf("%s/api/v1/test/%s", c.testServerURL, string(testType))
+	path := fmt.Sprintf("/api/v1/test/%s", string(testType))
 	var result TestResult
-	if err := c.doJSON(ctx, "POST", endpoint, body, &result); err != nil {
+	if err := c.testAPI.DoJSON(ctx, "POST", path, body, &result); err != nil {
 		return nil, fmt.Errorf("running %s test: %w", testType, err)
 	}
 	return &result, nil
 }
 
-func (c *Client) checkHealth(ctx context.Context, url string) bool {
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
-	if err != nil {
-		return false
-	}
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return false
-	}
-	defer resp.Body.Close()
-	return resp.StatusCode < 400
-}
-
-func (c *Client) doJSON(ctx context.Context, method, url string, body, result interface{}) error {
-	var bodyReader io.Reader
-	if body != nil {
-		data, err := json.Marshal(body)
-		if err != nil {
-			return fmt.Errorf("marshaling request: %w", err)
-		}
-		bodyReader = bytes.NewReader(data)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, method, url, bodyReader)
-	if err != nil {
-		return fmt.Errorf("creating request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	if c.apiKey != "" {
-		req.Header.Set("Authorization", "Bearer "+c.apiKey)
-	}
-
-	// Device identification headers.
-	req.Header.Set("X-Device-Serial", c.device.Serial)
-	req.Header.Set("X-Device-Hostname", c.device.Hostname)
-	req.Header.Set("X-Device-OS", c.device.OS)
-	req.Header.Set("X-Device-OS-Version", c.device.Version)
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 400 {
-		respBody, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(respBody))
-	}
-
-	if result != nil && resp.StatusCode != http.StatusNoContent {
-		if err := json.NewDecoder(resp.Body).Decode(result); err != nil {
-			return fmt.Errorf("decoding response: %w", err)
-		}
-	}
-	return nil
+func (c *Client) checkHealth(ctx context.Context, api *desktop.JSONClient, path string) bool {
+	return api.DoJSON(ctx, "GET", path, nil, nil) == nil
 }

@@ -20,7 +20,7 @@ var (
 
 func main() {
 	rootCmd := &cobra.Command{
-		Use:   "penguin",
+		Use:   "pcli",
 		Short: "PenguinTech unified client",
 		Long:  "PenguinTech unified desktop client for VPN, DNS, NTP, Nest, and ArticDBM services.",
 	}

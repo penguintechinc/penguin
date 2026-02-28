@@ -2,21 +2,18 @@ package waddleperf
 
 import (
 	"context"
-	"sync"
 	"time"
 
+	desktop "github.com/penguintechinc/penguin-libs/packages/penguin-desktop"
 	"github.com/sirupsen/logrus"
 )
 
 // TestRunner manages scheduled network test execution.
 type TestRunner struct {
-	client   *Client
-	schedule ScheduleConfig
-	logger   *logrus.Logger
-
-	mu     sync.Mutex
-	stopCh chan struct{}
-	wg     sync.WaitGroup
+	client         *Client
+	schedule       ScheduleConfig
+	logger         *logrus.Logger
+	scheduleWorker *desktop.TickWorker
 }
 
 // NewTestRunner creates a test runner with the given schedule configuration.
@@ -25,27 +22,36 @@ func NewTestRunner(client *Client, schedule ScheduleConfig, logger *logrus.Logge
 		client:   client,
 		schedule: schedule,
 		logger:   logger,
-		stopCh:   make(chan struct{}),
 	}
 }
 
 // Start begins periodic test execution if the schedule is enabled.
 func (r *TestRunner) Start() {
-	r.mu.Lock()
-	defer r.mu.Unlock()
 	if !r.schedule.Enabled || len(r.schedule.Tests) == 0 {
 		return
 	}
-	r.wg.Add(1)
-	go r.scheduleLoop()
+
+	interval := time.Duration(r.schedule.Interval) * time.Second
+	if interval < time.Second {
+		interval = 60 * time.Second
+	}
+
+	r.scheduleWorker = &desktop.TickWorker{
+		Interval: interval,
+		Timeout:  5 * time.Minute,
+		Action:   r.runScheduledTests,
+		OnError: func(err error) {
+			r.logger.WithError(err).Warn("scheduled test failed")
+		},
+	}
+	r.scheduleWorker.Start()
 }
 
 // Stop halts the scheduler and waits for any in-flight tests to complete.
 func (r *TestRunner) Stop() {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	close(r.stopCh)
-	r.wg.Wait()
+	if r.scheduleWorker != nil {
+		r.scheduleWorker.Stop()
+	}
 }
 
 // RunAll executes all configured tests and returns results.
@@ -102,23 +108,7 @@ func (r *TestRunner) RunOnce(ctx context.Context, cfg TestConfig) TestResult {
 	return *result
 }
 
-func (r *TestRunner) scheduleLoop() {
-	defer r.wg.Done()
-	interval := time.Duration(r.schedule.Interval) * time.Second
-	if interval < time.Second {
-		interval = 60 * time.Second
-	}
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-r.stopCh:
-			return
-		case <-ticker.C:
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-			r.RunAll(ctx, r.schedule.Tests)
-			cancel()
-		}
-	}
+func (r *TestRunner) runScheduledTests(ctx context.Context) error {
+	r.RunAll(ctx, r.schedule.Tests)
+	return nil
 }

@@ -1,40 +1,43 @@
 package articdbm
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/penguintechinc/penguin-libs/packages/penguin-desktop"
 	"github.com/sirupsen/logrus"
 )
 
 // Client is a REST client for the ArticDBM proxy service.
 type Client struct {
-	baseURL    string
-	authToken  string
-	httpClient *http.Client
-	logger     *logrus.Logger
+	api       *desktop.JSONClient
+	authToken string
+	logger    *logrus.Logger
 }
 
 // NewClient creates an ArticDBM client.
 func NewClient(baseURL, authToken string, logger *logrus.Logger) *Client {
-	return &Client{
-		baseURL:    strings.TrimRight(baseURL, "/"),
-		authToken:  authToken,
-		httpClient: &http.Client{Timeout: 30 * time.Second},
-		logger:     logger,
+	baseURL = strings.TrimRight(baseURL, "/")
+	c := &Client{
+		api:       desktop.NewJSONClient(baseURL, 30*time.Second),
+		authToken: authToken,
+		logger:    logger,
 	}
+	if authToken != "" {
+		c.api.GetToken = func() string {
+			return authToken
+		}
+	}
+	return c
 }
 
 // ListProxies returns all proxy instances.
 func (c *Client) ListProxies(ctx context.Context) ([]Proxy, error) {
 	var proxies []Proxy
-	if err := c.doJSON(ctx, "GET", c.baseURL+"/api/v1/proxies", nil, &proxies); err != nil {
+	if err := c.api.DoJSON(ctx, "GET", "/api/v1/proxies", nil, &proxies); err != nil {
 		return nil, err
 	}
 	return proxies, nil
@@ -43,7 +46,7 @@ func (c *Client) ListProxies(ctx context.Context) ([]Proxy, error) {
 // GetProxy returns a single proxy by name.
 func (c *Client) GetProxy(ctx context.Context, name string) (*Proxy, error) {
 	var proxy Proxy
-	if err := c.doJSON(ctx, "GET", c.baseURL+"/api/v1/proxies/"+name, nil, &proxy); err != nil {
+	if err := c.api.DoJSON(ctx, "GET", "/api/v1/proxies/"+name, nil, &proxy); err != nil {
 		return nil, err
 	}
 	return &proxy, nil
@@ -52,7 +55,7 @@ func (c *Client) GetProxy(ctx context.Context, name string) (*Proxy, error) {
 // CreateProxy creates a new proxy instance.
 func (c *Client) CreateProxy(ctx context.Context, req *CreateProxyRequest) (*Proxy, error) {
 	var proxy Proxy
-	if err := c.doJSON(ctx, "POST", c.baseURL+"/api/v1/proxies", req, &proxy); err != nil {
+	if err := c.api.DoJSON(ctx, "POST", "/api/v1/proxies", req, &proxy); err != nil {
 		return nil, err
 	}
 	return &proxy, nil
@@ -60,16 +63,16 @@ func (c *Client) CreateProxy(ctx context.Context, req *CreateProxyRequest) (*Pro
 
 // DeleteProxy removes a proxy instance.
 func (c *Client) DeleteProxy(ctx context.Context, name string) error {
-	return c.doJSON(ctx, "DELETE", c.baseURL+"/api/v1/proxies/"+name, nil, nil)
+	return c.api.DoJSON(ctx, "DELETE", "/api/v1/proxies/"+name, nil, nil)
 }
 
 // GetMetrics returns proxy metrics.
 func (c *Client) GetMetrics(ctx context.Context) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, "GET", c.baseURL+"/metrics", nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", c.api.BaseURL+"/metrics", nil)
 	if err != nil {
 		return "", err
 	}
-	resp, err := c.httpClient.Do(req)
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return "", err
 	}
@@ -83,11 +86,11 @@ func (c *Client) GetMetrics(ctx context.Context) (string, error) {
 
 // HealthCheck checks the proxy health.
 func (c *Client) HealthCheck(ctx context.Context) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, "GET", c.baseURL+"/health", nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", c.api.BaseURL+"/health", nil)
 	if err != nil {
 		return "", err
 	}
-	resp, err := c.httpClient.Do(req)
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return "", err
 	}
@@ -97,42 +100,4 @@ func (c *Client) HealthCheck(ctx context.Context) (string, error) {
 		return "", err
 	}
 	return string(body), nil
-}
-
-func (c *Client) doJSON(ctx context.Context, method, url string, body, result interface{}) error {
-	var bodyReader io.Reader
-	if body != nil {
-		data, err := json.Marshal(body)
-		if err != nil {
-			return fmt.Errorf("marshaling request: %w", err)
-		}
-		bodyReader = bytes.NewReader(data)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, method, url, bodyReader)
-	if err != nil {
-		return fmt.Errorf("creating request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	if c.authToken != "" {
-		req.Header.Set("Authorization", "Bearer "+c.authToken)
-	}
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 400 {
-		respBody, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(respBody))
-	}
-
-	if result != nil && resp.StatusCode != http.StatusNoContent {
-		if err := json.NewDecoder(resp.Body).Decode(result); err != nil {
-			return fmt.Errorf("decoding response: %w", err)
-		}
-	}
-	return nil
 }

@@ -1,25 +1,22 @@
 package killkrill
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
 
+	desktop "github.com/penguintechinc/penguin-libs/packages/penguin-desktop"
 	"github.com/sirupsen/logrus"
 )
 
 // Client communicates with the KillKrill logging/metrics service.
 type Client struct {
-	baseURL      string
+	api          *desktop.JSONClient
 	clientID     string
 	clientSecret string
-	httpClient   *http.Client
 	logger       *logrus.Logger
 
 	mu           sync.Mutex
@@ -30,20 +27,29 @@ type Client struct {
 	lastFlush    time.Time
 	connected    bool
 
-	stopCh chan struct{}
-	wg     sync.WaitGroup
+	flushWorker *desktop.TickWorker
 }
 
 // NewClient creates a KillKrill API client.
 func NewClient(baseURL, clientID, clientSecret string, logger *logrus.Logger) *Client {
-	return &Client{
-		baseURL:      strings.TrimRight(baseURL, "/"),
+	c := &Client{
 		clientID:     clientID,
 		clientSecret: clientSecret,
-		httpClient:   &http.Client{Timeout: 30 * time.Second},
 		logger:       logger,
-		stopCh:       make(chan struct{}),
 	}
+	c.api = desktop.NewJSONClient(strings.TrimRight(baseURL, "/"), 30*time.Second)
+	c.api.GetToken = func() string {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		return c.accessToken
+	}
+	c.flushWorker = &desktop.TickWorker{
+		Interval: 5 * time.Second,
+		Timeout:  10 * time.Second,
+		Action:   c.Flush,
+		OnError:  func(err error) { logger.WithError(err).Warn("killkrill flush failed") },
+	}
+	return c
 }
 
 // Connect authenticates and starts the background flush worker.
@@ -55,15 +61,13 @@ func (c *Client) Connect(ctx context.Context) error {
 	c.connected = true
 	c.mu.Unlock()
 
-	c.wg.Add(1)
-	go c.flushWorker()
+	c.flushWorker.Start()
 	return nil
 }
 
 // Disconnect stops the flush worker and flushes remaining items.
 func (c *Client) Disconnect(ctx context.Context) {
-	close(c.stopCh)
-	c.wg.Wait()
+	c.flushWorker.Stop()
 
 	// Final flush of remaining items.
 	if err := c.Flush(ctx); err != nil {
@@ -100,13 +104,13 @@ func (c *Client) Flush(ctx context.Context) error {
 	var errs []string
 
 	if len(logs) > 0 {
-		if err := c.doJSON(ctx, "POST", c.baseURL+"/api/v1/logs", logs, nil); err != nil {
+		if err := c.api.DoJSON(ctx, "POST", "/api/v1/logs", logs, nil); err != nil {
 			errs = append(errs, fmt.Sprintf("logs: %v", err))
 		}
 	}
 
 	if len(metrics) > 0 {
-		if err := c.doJSON(ctx, "POST", c.baseURL+"/api/v1/metrics", metrics, nil); err != nil {
+		if err := c.api.DoJSON(ctx, "POST", "/api/v1/metrics", metrics, nil); err != nil {
 			errs = append(errs, fmt.Sprintf("metrics: %v", err))
 		}
 	}
@@ -123,11 +127,11 @@ func (c *Client) Flush(ctx context.Context) error {
 
 // HealthCheck verifies connectivity to the KillKrill service.
 func (c *Client) HealthCheck(ctx context.Context) error {
-	req, err := http.NewRequestWithContext(ctx, "GET", c.baseURL+"/health", nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", c.api.BaseURL+"/health", nil)
 	if err != nil {
 		return err
 	}
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.api.HTTPClient.Do(req)
 	if err != nil {
 		return err
 	}
@@ -160,73 +164,12 @@ func (c *Client) authenticate(ctx context.Context) error {
 		"client_secret": c.clientSecret,
 	}
 	var resp authResponse
-	if err := c.doJSON(ctx, "POST", c.baseURL+"/api/v1/auth/login", body, &resp); err != nil {
+	if err := c.api.DoJSON(ctx, "POST", "/api/v1/auth/login", body, &resp); err != nil {
 		return err
 	}
 	c.mu.Lock()
 	c.accessToken = resp.AccessToken
 	c.refreshToken = resp.RefreshToken
 	c.mu.Unlock()
-	return nil
-}
-
-func (c *Client) flushWorker() {
-	defer c.wg.Done()
-	ticker := time.NewTicker(5 * time.Second)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-c.stopCh:
-			return
-		case <-ticker.C:
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			if err := c.Flush(ctx); err != nil {
-				c.logger.WithError(err).Warn("killkrill flush failed")
-			}
-			cancel()
-		}
-	}
-}
-
-func (c *Client) doJSON(ctx context.Context, method, url string, body, result interface{}) error {
-	var bodyReader io.Reader
-	if body != nil {
-		data, err := json.Marshal(body)
-		if err != nil {
-			return fmt.Errorf("marshaling request: %w", err)
-		}
-		bodyReader = bytes.NewReader(data)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, method, url, bodyReader)
-	if err != nil {
-		return fmt.Errorf("creating request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	c.mu.Lock()
-	token := c.accessToken
-	c.mu.Unlock()
-	if token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
-	}
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 400 {
-		respBody, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(respBody))
-	}
-
-	if result != nil && resp.StatusCode != http.StatusNoContent {
-		if err := json.NewDecoder(resp.Body).Decode(result); err != nil {
-			return fmt.Errorf("decoding response: %w", err)
-		}
-	}
 	return nil
 }

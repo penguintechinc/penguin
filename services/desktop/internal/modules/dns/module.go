@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"sync"
 
 	"github.com/penguintechinc/penguin/services/desktop/internal/module"
 	"github.com/penguintechinc/penguin/services/desktop/pkg/clischema"
@@ -15,11 +14,9 @@ import (
 
 // Module implements the DNS module for the desktop client.
 type Module struct {
+	module.BaseModule
 	dohClient *DoHClient
 	forwarder *Forwarder
-	logger    *logrus.Logger
-	mu        sync.RWMutex
-	started   bool
 }
 
 func New() *Module    { return &Module{} }
@@ -29,8 +26,8 @@ func (m *Module) Description() string { return "DNS-over-HTTPS client with local
 func (m *Module) Version() string     { return "0.1.0" }
 
 func (m *Module) Init(ctx context.Context, deps module.Dependencies) error {
-	m.logger = deps.Logger.(*logrus.Logger)
-	m.logger.WithField("module", m.Name()).Debug("Initializing DNS module")
+	m.Logger = deps.Logger.(*logrus.Logger)
+	m.Logger.WithField("module", m.Name()).Debug("Initializing DNS module")
 
 	cfg := &DoHConfig{
 		ServerURLs: []string{
@@ -40,41 +37,35 @@ func (m *Module) Init(ctx context.Context, deps module.Dependencies) error {
 		AuthToken: deps.AuthToken,
 		Timeout:   0,
 	}
-	m.dohClient = NewDoHClient(cfg, m.logger)
+	m.dohClient = NewDoHClient(cfg, m.Logger)
 
 	fwdCfg := &ForwarderConfig{
 		ListenAddr: "127.0.0.1:53",
 		ListenUDP:  true,
 		ListenTCP:  false,
 	}
-	m.forwarder = NewForwarder(m.dohClient, fwdCfg, m.logger)
+	m.forwarder = NewForwarder(m.dohClient, fwdCfg, m.Logger)
 	return nil
 }
 
 func (m *Module) Start(ctx context.Context) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.started = true
-	m.logger.WithField("module", m.Name()).Info("DNS module started")
+	m.MarkStarted()
+	m.Logger.WithField("module", m.Name()).Info("DNS module started")
 	return nil
 }
 
 func (m *Module) Stop(ctx context.Context) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
 	if m.forwarder != nil {
 		m.forwarder.Stop()
 	}
-	m.started = false
-	m.logger.WithField("module", m.Name()).Info("DNS module stopped")
+	m.MarkStopped()
+	m.Logger.WithField("module", m.Name()).Info("DNS module stopped")
 	return nil
 }
 
 func (m *Module) HealthCheck(ctx context.Context) module.HealthStatus {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	if !m.started {
-		return module.HealthStatus{State: module.HealthUnknown, Message: "module not started"}
+	if !m.IsStarted() {
+		return m.NotStartedStatus()
 	}
 	if m.dohClient != nil {
 		return module.HealthStatus{
@@ -168,10 +159,10 @@ func (m *Module) ExecuteCLICommand(ctx context.Context, req *modulepb.CLICommand
 	switch req.CommandPath {
 	case "dns query":
 		if m.dohClient == nil {
-			return &modulepb.CLICommandResponse{Stderr: "DNS client not initialized\n", ExitCode: 1}, nil
+			return modulepb.ErrorResponse(fmt.Errorf("DNS client not initialized")), nil
 		}
 		if len(req.Args) == 0 {
-			return &modulepb.CLICommandResponse{Stderr: "domain argument required\n", ExitCode: 1}, nil
+			return modulepb.ErrorResponse(fmt.Errorf("domain argument required")), nil
 		}
 		domain := req.Args[0]
 		recordType := "A"
@@ -180,10 +171,10 @@ func (m *Module) ExecuteCLICommand(ctx context.Context, req *modulepb.CLICommand
 		}
 		resp, err := m.dohClient.Query(ctx, domain, recordType)
 		if err != nil {
-			return &modulepb.CLICommandResponse{Stderr: fmt.Sprintf("query failed: %v\n", err), ExitCode: 1}, nil
+			return modulepb.ErrorResponse(err), nil
 		}
 		if len(resp.Answer) == 0 {
-			return &modulepb.CLICommandResponse{Stdout: fmt.Sprintf("No records found for %s (%s)\n", domain, recordType)}, nil
+			return modulepb.OKResponse(fmt.Sprintf("No records found for %s (%s)\n", domain, recordType)), nil
 		}
 		var sb strings.Builder
 		sb.WriteString(fmt.Sprintf("%-40s TTL    CLASS   TYPE    DATA\n", "NAME"))
@@ -192,7 +183,7 @@ func (m *Module) ExecuteCLICommand(ctx context.Context, req *modulepb.CLICommand
 			sb.WriteString(fmt.Sprintf("%-40s %-7d IN      %-7s %s\n",
 				answer.Name, answer.TTL, RecordTypeName(answer.Type), answer.Data))
 		}
-		return &modulepb.CLICommandResponse{Stdout: sb.String()}, nil
+		return modulepb.OKResponse(sb.String()), nil
 
 	case "dns forward":
 		action := "status"
@@ -202,31 +193,31 @@ func (m *Module) ExecuteCLICommand(ctx context.Context, req *modulepb.CLICommand
 		switch action {
 		case "start":
 			if m.forwarder == nil {
-				return &modulepb.CLICommandResponse{Stderr: "forwarder not initialized\n", ExitCode: 1}, nil
+				return modulepb.ErrorResponse(fmt.Errorf("forwarder not initialized")), nil
 			}
 			if m.forwarder.IsRunning() {
-				return &modulepb.CLICommandResponse{Stdout: "Forwarder already running\n"}, nil
+				return modulepb.OKResponse("Forwarder already running\n"), nil
 			}
 			if err := m.forwarder.Start(ctx); err != nil {
-				return &modulepb.CLICommandResponse{Stderr: fmt.Sprintf("failed to start forwarder: %v\n", err), ExitCode: 1}, nil
+				return modulepb.ErrorResponse(err), nil
 			}
-			return &modulepb.CLICommandResponse{Stdout: "DNS forwarder started on 127.0.0.1:53\n"}, nil
+			return modulepb.OKResponse("DNS forwarder started on 127.0.0.1:53\n"), nil
 		case "stop":
 			if m.forwarder == nil {
-				return &modulepb.CLICommandResponse{Stderr: "forwarder not initialized\n", ExitCode: 1}, nil
+				return modulepb.ErrorResponse(fmt.Errorf("forwarder not initialized")), nil
 			}
 			m.forwarder.Stop()
-			return &modulepb.CLICommandResponse{Stdout: "DNS forwarder stopped\n"}, nil
+			return modulepb.OKResponse("DNS forwarder stopped\n"), nil
 		case "status":
 			if m.forwarder == nil {
-				return &modulepb.CLICommandResponse{Stdout: "Forwarder: Not initialized\n"}, nil
+				return modulepb.OKResponse("Forwarder: Not initialized\n"), nil
 			}
 			if m.forwarder.IsRunning() {
-				return &modulepb.CLICommandResponse{Stdout: fmt.Sprintf("Forwarder: Running on %s\n", m.forwarder.GetListenAddr())}, nil
+				return modulepb.OKResponse(fmt.Sprintf("Forwarder: Running on %s\n", m.forwarder.GetListenAddr())), nil
 			}
-			return &modulepb.CLICommandResponse{Stdout: "Forwarder: Stopped\n"}, nil
+			return modulepb.OKResponse("Forwarder: Stopped\n"), nil
 		default:
-			return &modulepb.CLICommandResponse{Stderr: fmt.Sprintf("unknown action: %s (use start, stop, or status)\n", action), ExitCode: 1}, nil
+			return modulepb.ErrorResponse(fmt.Errorf("unknown action: %s (use start, stop, or status)", action)), nil
 		}
 
 	case "dns health":
@@ -235,10 +226,10 @@ func (m *Module) ExecuteCLICommand(ctx context.Context, req *modulepb.CLICommand
 		for k, v := range health.Details {
 			out += fmt.Sprintf("%s: %s\n", k, v)
 		}
-		return &modulepb.CLICommandResponse{Stdout: out}, nil
+		return modulepb.OKResponse(out), nil
 
 	default:
-		return &modulepb.CLICommandResponse{Stderr: fmt.Sprintf("unknown command: %s\n", req.CommandPath), ExitCode: 1}, nil
+		return modulepb.UnknownCommandResponse(req.CommandPath), nil
 	}
 }
 

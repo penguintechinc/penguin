@@ -9,6 +9,6 @@ import (
 )
 
 func runGUI(application *app.App) error {
-	fmt.Println("GUI not available in this build. Use penguin-cli instead.")
+	fmt.Println("GUI not available in this build. Use pcli instead.")
 	return application.Run(nil)
 }

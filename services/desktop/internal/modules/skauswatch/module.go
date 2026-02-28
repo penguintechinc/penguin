@@ -3,7 +3,6 @@ package skauswatch
 import (
 	"context"
 	"fmt"
-	"sync"
 
 	"github.com/penguintechinc/penguin/services/desktop/internal/module"
 	"github.com/penguintechinc/penguin/services/desktop/pkg/clischema"
@@ -14,10 +13,8 @@ import (
 
 // Module implements the SkaUsWatch EDR client as a PluginModule.
 type Module struct {
-	client  *Client
-	logger  *logrus.Logger
-	mu      sync.RWMutex
-	started bool
+	module.BaseModule
+	client *Client
 }
 
 func New() *Module              { return &Module{} }
@@ -27,39 +24,33 @@ func (m *Module) Description() string { return "Endpoint detection and response 
 func (m *Module) Version() string     { return "0.1.0" }
 
 func (m *Module) Init(ctx context.Context, deps module.Dependencies) error {
-	m.logger = deps.Logger.(*logrus.Logger)
+	m.Logger = deps.Logger.(*logrus.Logger)
 	return nil
 }
 
 func (m *Module) Start(ctx context.Context) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.started = true
+	m.BaseModule.MarkStarted()
 	if m.client != nil {
 		if err := m.client.RegisterEndpoint(ctx); err != nil {
-			m.logger.WithError(err).Warn("skauswatch registration failed")
+			m.Logger.WithError(err).Warn("skauswatch registration failed")
 		}
 		m.client.StartCheckin()
 	}
-	m.logger.Info("SkaUsWatch module started")
+	m.Logger.Info("SkaUsWatch module started")
 	return nil
 }
 
 func (m *Module) Stop(ctx context.Context) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
 	if m.client != nil {
 		m.client.StopCheckin()
 	}
-	m.started = false
+	m.BaseModule.MarkStopped()
 	return nil
 }
 
 func (m *Module) HealthCheck(ctx context.Context) module.HealthStatus {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	if !m.started {
-		return module.HealthStatus{State: module.HealthUnknown, Message: "not started"}
+	if !m.BaseModule.IsStarted() {
+		return m.BaseModule.NotStartedStatus()
 	}
 	if m.client == nil {
 		return module.HealthStatus{State: module.HealthDegraded, Message: "client not configured"}
@@ -125,13 +116,13 @@ func (m *Module) HandleGUIEvent(ctx context.Context, event *modulepb.GUIEvent) (
 		case "sw-scan-quick":
 			go func() {
 				if _, err := m.client.StartScan(ctx, "quick"); err != nil {
-					m.logger.WithError(err).Warn("quick scan failed")
+					m.Logger.WithError(err).Warn("quick scan failed")
 				}
 			}()
 		case "sw-scan-full":
 			go func() {
 				if _, err := m.client.StartScan(ctx, "full"); err != nil {
-					m.logger.WithError(err).Warn("full scan failed")
+					m.Logger.WithError(err).Warn("full scan failed")
 				}
 			}()
 		}
@@ -172,14 +163,14 @@ func (m *Module) GetCLICommands(ctx context.Context) (*modulepb.CLICommandList, 
 
 func (m *Module) ExecuteCLICommand(ctx context.Context, req *modulepb.CLICommandRequest) (*modulepb.CLICommandResponse, error) {
 	if m.client == nil {
-		return &modulepb.CLICommandResponse{Stderr: "skauswatch client not configured\n", ExitCode: 1}, nil
+		return modulepb.ErrorResponse(fmt.Errorf("skauswatch client not configured")), nil
 	}
 
 	switch req.CommandPath {
 	case "skauswatch status":
 		status, err := m.client.GetEndpointStatus(ctx)
 		if err != nil {
-			return &modulepb.CLICommandResponse{Stderr: err.Error() + "\n", ExitCode: 1}, nil
+			return modulepb.ErrorResponse(err), nil
 		}
 		regStr := "no"
 		if status.Registered {
@@ -187,14 +178,13 @@ func (m *Module) ExecuteCLICommand(ctx context.Context, req *modulepb.CLICommand
 		}
 		out := fmt.Sprintf("Registered:    %s\nEndpoint ID:   %s\nLast checkin:  %s\nAgent version: %s\nOS:            %s\nActive threats: %d\n",
 			regStr, status.EndpointID, status.LastCheckin, status.AgentVersion, status.OSInfo, status.ThreatCount)
-		return &modulepb.CLICommandResponse{Stdout: out}, nil
+		return modulepb.OKResponse(out), nil
 
 	case "skauswatch alerts":
 		severity := req.Flags["severity"]
-		status := "active"
-		alerts, err := m.client.GetAlerts(ctx, status)
+		alerts, err := m.client.GetAlerts(ctx, "active")
 		if err != nil {
-			return &modulepb.CLICommandResponse{Stderr: err.Error() + "\n", ExitCode: 1}, nil
+			return modulepb.ErrorResponse(err), nil
 		}
 		out := ""
 		for _, a := range alerts {
@@ -206,7 +196,7 @@ func (m *Module) ExecuteCLICommand(ctx context.Context, req *modulepb.CLICommand
 		if out == "" {
 			out = "No alerts found\n"
 		}
-		return &modulepb.CLICommandResponse{Stdout: out}, nil
+		return modulepb.OKResponse(out), nil
 
 	case "skauswatch scan":
 		scanType := req.Flags["type"]
@@ -215,45 +205,45 @@ func (m *Module) ExecuteCLICommand(ctx context.Context, req *modulepb.CLICommand
 		}
 		result, err := m.client.StartScan(ctx, scanType)
 		if err != nil {
-			return &modulepb.CLICommandResponse{Stderr: err.Error() + "\n", ExitCode: 1}, nil
+			return modulepb.ErrorResponse(err), nil
 		}
 		out := fmt.Sprintf("Scan started: %s (type: %s, status: %s)\n", result.ID, result.Type, result.Status)
-		return &modulepb.CLICommandResponse{Stdout: out}, nil
+		return modulepb.OKResponse(out), nil
 
 	case "skauswatch quarantine list":
 		entries, err := m.client.GetQuarantine(ctx)
 		if err != nil {
-			return &modulepb.CLICommandResponse{Stderr: err.Error() + "\n", ExitCode: 1}, nil
+			return modulepb.ErrorResponse(err), nil
 		}
 		if len(entries) == 0 {
-			return &modulepb.CLICommandResponse{Stdout: "No quarantined files\n"}, nil
+			return modulepb.OKResponse("No quarantined files\n"), nil
 		}
 		out := ""
 		for _, e := range entries {
 			out += fmt.Sprintf("%-12s %-12s %-10s %s\n", e.ID, e.ThreatType, e.Status, e.FilePath)
 		}
-		return &modulepb.CLICommandResponse{Stdout: out}, nil
+		return modulepb.OKResponse(out), nil
 
 	case "skauswatch quarantine restore":
 		if len(req.Args) == 0 {
-			return &modulepb.CLICommandResponse{Stderr: "quarantine entry ID required\n", ExitCode: 1}, nil
+			return modulepb.ErrorResponse(fmt.Errorf("quarantine entry ID required")), nil
 		}
 		if err := m.client.RestoreFile(ctx, req.Args[0]); err != nil {
-			return &modulepb.CLICommandResponse{Stderr: err.Error() + "\n", ExitCode: 1}, nil
+			return modulepb.ErrorResponse(err), nil
 		}
-		return &modulepb.CLICommandResponse{Stdout: fmt.Sprintf("File %s restored\n", req.Args[0])}, nil
+		return modulepb.OKResponse(fmt.Sprintf("File %s restored\n", req.Args[0])), nil
 
 	case "skauswatch quarantine delete":
 		if len(req.Args) == 0 {
-			return &modulepb.CLICommandResponse{Stderr: "quarantine entry ID required\n", ExitCode: 1}, nil
+			return modulepb.ErrorResponse(fmt.Errorf("quarantine entry ID required")), nil
 		}
 		if err := m.client.DeleteFile(ctx, req.Args[0]); err != nil {
-			return &modulepb.CLICommandResponse{Stderr: err.Error() + "\n", ExitCode: 1}, nil
+			return modulepb.ErrorResponse(err), nil
 		}
-		return &modulepb.CLICommandResponse{Stdout: fmt.Sprintf("File %s deleted\n", req.Args[0])}, nil
+		return modulepb.OKResponse(fmt.Sprintf("File %s deleted\n", req.Args[0])), nil
 
 	default:
-		return &modulepb.CLICommandResponse{Stderr: fmt.Sprintf("unknown command: %s\n", req.CommandPath), ExitCode: 1}, nil
+		return modulepb.UnknownCommandResponse(req.CommandPath), nil
 	}
 }
 

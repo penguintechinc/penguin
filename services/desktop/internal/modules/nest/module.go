@@ -3,7 +3,6 @@ package nest
 import (
 	"context"
 	"fmt"
-	"sync"
 
 	"github.com/penguintechinc/penguin/services/desktop/internal/module"
 	"github.com/penguintechinc/penguin/services/desktop/pkg/clischema"
@@ -14,46 +13,38 @@ import (
 
 // Module implements the Nest module for the desktop client.
 type Module struct {
-	client  *Client
-	logger  *logrus.Logger
-	mu      sync.RWMutex
-	started bool
+	module.BaseModule
+	client *Client
 }
 
-func New() *Module              { return &Module{} }
+func New() *Module                    { return &Module{} }
 func (m *Module) Name() string        { return "nest" }
 func (m *Module) DisplayName() string { return "Nest" }
 func (m *Module) Description() string { return "Resource management via Nest API" }
 func (m *Module) Version() string     { return "0.1.0" }
 
 func (m *Module) Init(ctx context.Context, deps module.Dependencies) error {
-	m.logger = deps.Logger.(*logrus.Logger)
-	m.logger.WithField("module", m.Name()).Debug("Initializing Nest module")
+	m.Logger = deps.Logger.(*logrus.Logger)
+	m.Logger.WithField("module", m.Name()).Debug("Initializing Nest module")
 	baseURL := "http://localhost:8080"
-	m.client = NewClient(baseURL, deps.AuthToken, m.logger)
+	m.client = NewClient(baseURL, deps.AuthToken, m.Logger)
 	return nil
 }
 
 func (m *Module) Start(ctx context.Context) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.started = true
-	m.logger.WithField("module", m.Name()).Info("Nest module started")
+	m.MarkStarted()
+	m.Logger.WithField("module", m.Name()).Info("Nest module started")
 	return nil
 }
 
 func (m *Module) Stop(ctx context.Context) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.started = false
-	m.logger.WithField("module", m.Name()).Info("Nest module stopped")
+	m.MarkStopped()
+	m.Logger.WithField("module", m.Name()).Info("Nest module stopped")
 	return nil
 }
 
 func (m *Module) HealthCheck(ctx context.Context) module.HealthStatus {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	if !m.started {
+	if !m.IsStarted() {
 		return module.HealthStatus{State: module.HealthUnknown, Message: "module not started"}
 	}
 	if m.client != nil {
@@ -245,7 +236,7 @@ func (m *Module) ExecuteCLICommand(ctx context.Context, req *modulepb.CLICommand
 		return &modulepb.CLICommandResponse{Stdout: out}, nil
 
 	default:
-		return &modulepb.CLICommandResponse{Stderr: fmt.Sprintf("unknown command: %s\n", req.CommandPath), ExitCode: 1}, nil
+		return modulepb.UnknownCommandResponse(req.CommandPath), nil
 	}
 }
 
