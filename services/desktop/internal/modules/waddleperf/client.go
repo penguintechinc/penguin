@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	desktop "github.com/penguintechinc/penguin-libs/packages/penguin-desktop"
+	desktop "github.com/penguintechinc/penguin/services/desktop/pkg/desktop"
 	"github.com/sirupsen/logrus"
 )
 
