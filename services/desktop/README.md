@@ -18,7 +18,7 @@ A cross-platform desktop client for the Penguin ecosystem, built with a plugin a
 The client uses the [HashiCorp go-plugin](https://github.com/hashicorp/go-plugin) pattern where each module runs as a separate binary communicating with the host over net/rpc via stdin/stdout:
 
 ```
-Host Binary (penguin-desktop / penguin-cli)
+Host Binary (penguin-desktop / pcli)
     │
     ├── discovers plugins/ directory for penguin-mod-* binaries
     ├── launches each as child process via go-plugin
@@ -51,7 +51,7 @@ make build
 ./bin/penguin-desktop
 
 # Run the CLI
-./bin/penguin-cli --help
+./bin/pcli --help
 ```
 
 ## Project Structure
@@ -60,7 +60,7 @@ make build
 services/desktop/
 ├── api/proto/          # Proto definitions (reference documentation)
 ├── cmd/
-│   ├── penguin-cli/    # CLI host binary
+│   ├── pcli/           # CLI host binary
 │   ├── penguin-desktop/# Desktop GUI host binary
 │   └── modules/        # 6 plugin module binaries
 ├── internal/

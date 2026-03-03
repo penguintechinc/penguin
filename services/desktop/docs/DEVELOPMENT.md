@@ -29,7 +29,7 @@ The codebase follows Go standard layout conventions:
 | Binary | Path | Purpose |
 |--------|------|---------|
 | `penguin-desktop` | `cmd/penguin-desktop/` | GUI client (Fyne) |
-| `penguin-cli` | `cmd/penguin-cli/` | CLI client (Cobra) |
+| `pcli` | `cmd/pcli/` | CLI client (Cobra) |
 
 ### Module Plugins
 
@@ -69,8 +69,8 @@ make clean && make build
 ./bin/penguin-desktop
 
 # CLI
-./bin/penguin-cli status
-./bin/penguin-cli vpn connect --server us-west-1
+./bin/pcli status
+./bin/pcli vpn connect --server us-west-1
 ```
 
 The host automatically discovers `penguin-mod-*` binaries in the `plugins/` directory at startup.

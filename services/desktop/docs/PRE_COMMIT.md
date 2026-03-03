@@ -12,7 +12,7 @@ make clean && make build
 
 All 8 binaries must compile without errors:
 - `bin/penguin-desktop`
-- `bin/penguin-cli`
+- `bin/pcli`
 - `plugins/penguin-mod-{vpn,openziti,dns,ntp,nest,articdbm}`
 
 ### 2. Lint
