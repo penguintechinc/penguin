@@ -5,7 +5,7 @@ kind: Kustomization
 metadata:
   name: project-template-beta
 
-namespace: project-template-beta
+namespace: project-template
 
 namePrefix: beta-
 
@@ -24,11 +24,14 @@ replicas:
   count: 2
 
 images:
-- name: registry-dal2.penguintech.io/project-template/flask-backend
+- name: flask-backend
+  newName: ghcr.io/penguintechinc/penguin/flask-backend
   newTag: latest
-- name: registry-dal2.penguintech.io/project-template/go-backend
+- name: go-backend
+  newName: ghcr.io/penguintechinc/penguin/go-backend
   newTag: latest
-- name: registry-dal2.penguintech.io/project-template/webui
+- name: webui
+  newName: ghcr.io/penguintechinc/penguin/webui
   newTag: latest
 
 configMapGenerator:

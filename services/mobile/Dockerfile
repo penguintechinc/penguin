@@ -1,6 +1,6 @@
 # Flutter CI Build Environment
 # Debian bookworm base for Android builds (iOS requires macOS runner)
-FROM debian:bookworm-slim AS base
+FROM debian:bookworm-slim@sha256:f06537653ac770703bc45b4b113475bd402f451e85223f0f2837acbf89ab020a AS base
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \

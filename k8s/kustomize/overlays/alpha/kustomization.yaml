@@ -24,11 +24,14 @@ replicas:
   count: 1
 
 images:
-- name: registry-dal2.penguintech.io/project-template/flask-backend
+- name: flask-backend
+  newName: localhost:32000/flask-backend
   newTag: latest
-- name: registry-dal2.penguintech.io/project-template/go-backend
+- name: go-backend
+  newName: localhost:32000/go-backend
   newTag: latest
-- name: registry-dal2.penguintech.io/project-template/webui
+- name: webui
+  newName: localhost:32000/webui
   newTag: latest
 
 configMapGenerator:

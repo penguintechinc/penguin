@@ -1,14 +1,17 @@
 # Beta environment values for project-template
 # Pre-production testing environment
 
-namespace: project-template-beta
+namespace: project-template
 namespaceCreate: true
+
+imagePullSecrets:
+  - name: ghcr-pull-secret
 
 # Flask Backend - Beta Configuration
 flaskBackend:
   enabled: true
   image:
-    repository: registry-dal2.penguintech.io/project-template/flask-backend
+    repository: ghcr.io/penguintechinc/penguin/flask-backend
     tag: latest
     pullPolicy: Always
   replicaCount: 2
@@ -33,7 +36,7 @@ flaskBackend:
 goBackend:
   enabled: true
   image:
-    repository: registry-dal2.penguintech.io/project-template/go-backend
+    repository: ghcr.io/penguintechinc/penguin/go-backend
     tag: latest
     pullPolicy: Always
   replicaCount: 2
@@ -56,7 +59,7 @@ goBackend:
 webui:
   enabled: true
   image:
-    repository: registry-dal2.penguintech.io/project-template/webui
+    repository: ghcr.io/penguintechinc/penguin/webui
     tag: latest
     pullPolicy: Always
   replicaCount: 2
@@ -204,7 +207,7 @@ networkPolicy:
 # Service Account
 serviceAccount:
   create: true
-  name: project-template-beta-sa
+  name: project-template-sa
 
 # Shared Configuration - Beta
 config:
