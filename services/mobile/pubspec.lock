@@ -126,9 +126,11 @@ packages:
   flutter_libs:
     dependency: "direct main"
     description:
-      path: "../../../penguin-libs/packages/flutter_libs"
-      relative: true
-    source: path
+      path: "packages/flutter_libs"
+      ref: main
+      resolved-ref: "795b662a6e2877f8e181bdc3000b0c76da6ad214"
+      url: "https://github.com/penguintechinc/penguin-libs.git"
+    source: git
     version: "0.1.0"
   flutter_lints:
     dependency: "direct dev"

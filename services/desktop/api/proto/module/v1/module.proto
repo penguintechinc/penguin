@@ -1,0 +1,139 @@
+syntax = "proto3";
+
+package module.v1;
+
+option go_package = "github.com/penguintechinc/penguin/services/desktop/pkg/modulepb";
+
+// ModuleService defines the gRPC interface for plugin modules.
+service ModuleService {
+  // Identity & lifecycle
+  rpc GetInfo(Empty) returns (ModuleInfo);
+  rpc Init(InitRequest) returns (InitResponse);
+  rpc Start(Empty) returns (Empty);
+  rpc Stop(Empty) returns (Empty);
+  rpc HealthCheck(Empty) returns (HealthCheckResponse);
+
+  // Declarative GUI
+  rpc GetGUIPanel(Empty) returns (GUIPanel);
+  rpc HandleGUIEvent(GUIEvent) returns (GUIPanel);
+
+  // CLI
+  rpc GetCLICommands(Empty) returns (CLICommandList);
+  rpc ExecuteCLICommand(CLICommandRequest) returns (CLICommandResponse);
+
+  // Icon (PNG bytes)
+  rpc GetIcon(Empty) returns (IconResponse);
+}
+
+message Empty {}
+
+// Identity
+message ModuleInfo {
+  string name = 1;
+  string display_name = 2;
+  string description = 3;
+  string version = 4;
+}
+
+// Lifecycle
+message InitRequest {
+  string config_dir = 1;
+  string data_dir = 2;
+  string auth_token = 3;
+  string license_key = 4;
+  map<string, string> extra = 5;
+}
+
+message InitResponse {
+  bool ok = 1;
+  string error = 2;
+}
+
+// Health
+message HealthCheckResponse {
+  HealthState state = 1;
+  string message = 2;
+  map<string, string> details = 3;
+}
+
+enum HealthState {
+  HEALTH_UNKNOWN = 0;
+  HEALTH_HEALTHY = 1;
+  HEALTH_DEGRADED = 2;
+  HEALTH_UNHEALTHY = 3;
+}
+
+// Declarative GUI
+message GUIPanel {
+  Widget root = 1;
+}
+
+message Widget {
+  WidgetType type = 1;
+  string id = 2;
+  string text = 3;
+  string value = 4;
+  repeated Widget children = 5;
+  bool disabled = 6;
+  repeated string options = 7;
+  map<string, string> properties = 8;
+}
+
+enum WidgetType {
+  WIDGET_LABEL = 0;
+  WIDGET_BUTTON = 1;
+  WIDGET_ENTRY = 2;
+  WIDGET_SELECT = 3;
+  WIDGET_CARD = 4;
+  WIDGET_VBOX = 5;
+  WIDGET_HBOX = 6;
+  WIDGET_SEPARATOR = 7;
+  WIDGET_SCROLL = 8;
+  WIDGET_CHECKBOX = 9;
+  WIDGET_RICHTEXT = 10;
+}
+
+message GUIEvent {
+  string widget_id = 1;
+  string event_type = 2;  // "tapped", "changed", "submitted"
+  string value = 3;
+}
+
+// CLI
+message CLICommandList {
+  repeated CLICommand commands = 1;
+}
+
+message CLICommand {
+  string use = 1;
+  string short = 2;
+  string long = 3;
+  repeated CLIFlag flags = 4;
+  repeated CLICommand subcommands = 5;
+}
+
+message CLIFlag {
+  string name = 1;
+  string shorthand = 2;
+  string usage = 3;
+  string default_value = 4;
+  bool required = 5;
+}
+
+message CLICommandRequest {
+  repeated string args = 1;
+  map<string, string> flags = 2;
+  string command_path = 3;  // e.g., "vpn connect"
+}
+
+message CLICommandResponse {
+  string stdout = 1;
+  string stderr = 2;
+  int32 exit_code = 3;
+}
+
+// Icon
+message IconResponse {
+  bytes png_data = 1;
+  string name = 2;
+}

@@ -1,0 +1,30 @@
+modules:
+  vpn:
+    enabled: true
+    manager_url: "https://vpn.penguintech.io"
+  openziti:
+    enabled: true
+  dns:
+    enabled: true
+    server_urls:
+      - "https://dns.penguintech.io/resolve"
+    protocol: "doh"
+  ntp:
+    enabled: false
+    servers:
+      - "pool.ntp.org"
+      - "time.google.com"
+  nest:
+    enabled: true
+    api_url: "https://nest.penguintech.io/api/v1"
+  articdbm:
+    enabled: false
+    api_url: "https://articdbm.penguintech.io"
+auth:
+  jwt_server: "https://auth.penguintech.io"
+license:
+  server_url: "https://license.penguintech.io"
+  cache_ttl_minutes: 1440
+logging:
+  level: "info"
+  format: "json"
