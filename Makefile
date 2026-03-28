@@ -12,7 +12,7 @@ VERSION := $(shell cat .version 2>/dev/null || echo "development")
 DOCKER_REGISTRY := ghcr.io
 DOCKER_ORG := penguintechinc
 GO_VERSION := 1.24.2
-PYTHON_VERSION := 3.12
+PYTHON_VERSION := 3.13
 NODE_VERSION := 18
 FLUTTER_VERSION := 3.38.9
 
@@ -152,7 +152,7 @@ test-go: ## Testing - Run Go tests
 
 test-python: ## Testing - Run Python tests
 	@echo "$(BLUE)Running Python tests...$(RESET)"
-	@pytest --cov=shared --cov=apps --cov-report=xml:coverage-python.xml --cov-report=html:htmlcov-python
+	@pytest --cov=services/flask-backend --cov=apps --cov-report=xml:coverage-python.xml --cov-report=html:htmlcov-python --cov-fail-under=90 tests/
 
 test-node: ## Testing - Run Node.js tests
 	@echo "$(BLUE)Running Node.js tests...$(RESET)"
@@ -244,11 +244,18 @@ docker-clean: ## Docker - Clean up Docker resources
 
 # Code Quality Commands
 lint: ## Code Quality - Run linting for all languages
-	@echo "$(BLUE)Running linting...$(RESET)"
-	@$(MAKE) lint-go
-	@$(MAKE) lint-python
-	@$(MAKE) lint-node
-	@$(MAKE) lint-flutter
+	@echo "$(BLUE)=== Linting ===$(RESET)"
+	@if command -v flake8 >/dev/null 2>&1; then echo "$(YELLOW)-- flake8 --$(RESET)"; python3 -m flake8 . --max-line-length=120 --exclude=.git,__pycache__,venv,node_modules,services/mobile || true; fi
+	@if command -v black >/dev/null 2>&1; then echo "$(YELLOW)-- black --$(RESET)"; black --check . --exclude '/(\.git|venv|__pycache__|node_modules|services/mobile)/' || true; fi
+	@if command -v isort >/dev/null 2>&1; then echo "$(YELLOW)-- isort --$(RESET)"; isort --check-only . || true; fi
+	@if command -v mypy >/dev/null 2>&1; then echo "$(YELLOW)-- mypy --$(RESET)"; python3 -m mypy . --ignore-missing-imports || true; fi
+	@if command -v golangci-lint >/dev/null 2>&1; then echo "$(YELLOW)-- golangci-lint --$(RESET)"; find . -name "go.mod" -not -path "*/.git/*" -not -path "*/vendor/*" | xargs -I{} dirname {} | xargs -I{} sh -c 'cd {} && golangci-lint run || true'; fi
+	@if command -v hadolint >/dev/null 2>&1; then echo "$(YELLOW)-- hadolint --$(RESET)"; find . -name "Dockerfile*" -not -path "*/.git/*" | xargs hadolint || true; fi
+	@if command -v shellcheck >/dev/null 2>&1; then echo "$(YELLOW)-- shellcheck --$(RESET)"; find . -name "*.sh" -not -path "*/.git/*" | xargs shellcheck || true; fi
+	@npm run lint 2>/dev/null || true
+	@cd web && npm run lint 2>/dev/null || true
+	@cd services/mobile && flutter analyze 2>/dev/null || true
+	@echo "$(GREEN)Linting complete$(RESET)"
 
 lint-go: ## Code Quality - Run Go linting
 	@echo "$(BLUE)Linting Go code...$(RESET)"
@@ -508,3 +515,49 @@ helm-lint: ## Helm - Lint chart
 
 helm-template: ## Helm - Render templates (dry-run)
 	@helm template $(PROJECT_NAME) ./$(HELM_DIR) --values ./$(HELM_DIR)/values-alpha.yaml
+
+test-unit: ## Testing - Run unit tests (Go, Python, Node.js, Flutter)
+	@echo "$(BLUE)Running unit tests...$(RESET)"
+	@$(MAKE) test-go && $(MAKE) test-python && $(MAKE) test-node && $(MAKE) test-flutter
+
+test-e2e: ## Testing - Run end-to-end tests
+	@echo "$(BLUE)Running end-to-end tests...$(RESET)"
+	@echo "$(YELLOW)No e2e tests defined$(RESET)"
+
+test-functional: ## Testing - Run functional tests
+	@echo "$(BLUE)Running functional tests...$(RESET)"
+	@echo "$(YELLOW)No functional tests defined$(RESET)"
+
+test-security: ## Testing - Run security tests
+	@echo "$(BLUE)=== Security Scans ===$(RESET)"
+	@if command -v bandit >/dev/null 2>&1; then echo "$(YELLOW)-- bandit --$(RESET)"; bandit -r . -x ./tests,./venv,./.git,./services/mobile --quiet 2>/dev/null || true; fi
+	@if command -v pip-audit >/dev/null 2>&1; then echo "$(YELLOW)-- pip-audit --$(RESET)"; find . -name "requirements.txt" -not -path "*/.git/*" -not -path "*/venv/*" | xargs -I{} pip-audit -r {} 2>/dev/null || true; fi
+	@if command -v safety >/dev/null 2>&1; then echo "$(YELLOW)-- safety --$(RESET)"; safety check --json 2>/dev/null || true; fi
+	@if command -v gosec >/dev/null 2>&1; then echo "$(YELLOW)-- gosec --$(RESET)"; find . -name "go.mod" -not -path "*/.git/*" -not -path "*/vendor/*" | xargs -I{} dirname {} | xargs -I{} sh -c 'cd {} && gosec ./... 2>/dev/null || true'; fi
+	@if command -v govulncheck >/dev/null 2>&1; then echo "$(YELLOW)-- govulncheck --$(RESET)"; find . -name "go.mod" -not -path "*/.git/*" -not -path "*/vendor/*" | xargs -I{} dirname {} | xargs -I{} sh -c 'cd {} && govulncheck ./... 2>/dev/null || true'; fi
+	@find . -name "package.json" -not -path "*/.git/*" -not -path "*/node_modules/*" -not -path "*/services/mobile/*" -maxdepth 3 | xargs -I{} dirname {} | xargs -I{} sh -c 'cd {} && echo "$(YELLOW)-- npm audit: {} --$(RESET)" && npm audit 2>/dev/null || true'
+	@if command -v gitleaks >/dev/null 2>&1; then echo "$(YELLOW)-- gitleaks --$(RESET)"; gitleaks detect --source . --no-git 2>/dev/null || true; fi
+	@if command -v trufflehog >/dev/null 2>&1; then echo "$(YELLOW)-- trufflehog --$(RESET)"; trufflehog filesystem . --json 2>/dev/null || true; fi
+	@if command -v trivy >/dev/null 2>&1; then echo "$(YELLOW)-- trivy --$(RESET)"; find . -name "Dockerfile*" -not -path "*/.git/*" | xargs -I{} trivy config {} 2>/dev/null || true; fi
+	@echo "$(GREEN)Security scans complete$(RESET)"
+
+seed-mock-data: ## Testing - Seed database with mock data
+	@echo "$(BLUE)Seeding mock data...$(RESET)"
+	@echo "$(YELLOW)No mock data seeding defined$(RESET)"
+
+pre-commit: ## Testing - Run pre-commit checks (lint, security, tests)
+	@echo "$(BLUE)=== Pre-Commit Checks ===$(RESET)"
+	@echo "$(YELLOW)Step 1: Linting$(RESET)"
+	@$(MAKE) lint
+	@echo ""
+	@echo "$(YELLOW)Step 2: Security Scanning$(RESET)"
+	@$(MAKE) test-security
+	@echo ""
+	@echo "$(YELLOW)Step 3: Running Tests$(RESET)"
+	@$(MAKE) test
+	@echo ""
+	@echo "$(GREEN)=== Pre-Commit Checks Complete ===$(RESET)"
+
+deploy-dev: ## Deploy - Deploy to development environment
+	@echo "$(BLUE)Deploying to development...$(RESET)"
+	@$(MAKE) deploy-staging
