@@ -155,9 +155,8 @@ def create_app(config_name: str = "production") -> Flask:
     # ------------------------------------------------------------------
     from penguin_dal.flask_ext import init_dal
 
-    dal = init_dal(flask_app, uri=db_url, pool_size=5)
-    # Reflect so penguin-dal discovers the tables we just created
-    dal._metadata.reflect(bind=dal._engine)
+    init_dal(flask_app, uri=db_url, pool_size=5)
+    # DB(reflect=True) is the default — tables are reflected on init
 
     # ------------------------------------------------------------------
     # Testing seed data — deterministic state expected by test_key_permission_enforcement

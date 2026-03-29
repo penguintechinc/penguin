@@ -3,13 +3,10 @@ flask==3.1.0
 flask-jwt-extended==4.7.1
 flask-security-too==5.5.2
 
-# PenguinTech Shared Libraries
-# Install via: pip install -e /home/penguin/code/penguin-libs/packages/python-dal
-# Install via: pip install -e /home/penguin/code/penguin-libs/packages/python-licensing
-# Install via: pip install -e /home/penguin/code/penguin-libs/packages/python-libs
-penguin-dal @ file:///home/penguin/code/penguin-libs/packages/python-dal
-penguin-licensing @ file:///home/penguin/code/penguin-libs/packages/python-licensing
-penguin-libs @ file:///home/penguin/code/penguin-libs/packages/python-libs
+# PenguinTech Shared Libraries (published to PyPI)
+penguin-dal==0.1.0
+penguin-licensing==0.1.0
+penguin-libs==0.1.0
 
 # Database ORM & Migrations
 SQLAlchemy==2.0.36
