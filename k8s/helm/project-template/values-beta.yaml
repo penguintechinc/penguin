@@ -123,7 +123,7 @@ redis:
 
 # Ingress - Beta Configuration
 ingress:
-  enabled: true
+  enabled: false
   className: nginx
   annotations:
     cert-manager.io/cluster-issuer: letsencrypt-staging
@@ -155,6 +155,22 @@ ingress:
     - secretName: penguintech-cloud-wildcard-tls
       hosts:
         - project-template.penguintech.cloud
+
+httproute:
+  enabled: true
+  gatewayName: shared
+  gatewayNamespace: gateway
+  host: "penguin.penguintech.cloud"
+  rules:
+    - path: /api/v1
+      service: "project-template-flask-backend"
+      port: 5000
+    - path: /api/v2
+      service: "project-template-go-backend"
+      port: 8080
+    - path: /
+      service: "project-template-webui"
+      port: 3000
 
 # Autoscaling - Limited for Beta
 autoscaling:

@@ -235,6 +235,14 @@ redis:
   metrics:
     enabled: true
 
+# HTTPRoute Configuration (Cilium Gateway API)
+httproute:
+  enabled: false
+  gatewayName: shared
+  gatewayNamespace: gateway
+  host: ""
+  rules: []
+
 # Ingress Configuration
 ingress:
   enabled: true

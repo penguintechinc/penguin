@@ -14,73 +14,158 @@ env:
   IMAGE_NAME_PYTHON: ${{ github.repository }}/python-app
 
 jobs:
-  # Build matrix for different services
-  build-and-push:
+  # Build matrix for different services × platforms (parallel per-arch builds)
+  build-platform:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        service:
-          - name: api
+        include:
+          # API service
+          - service: api
             dockerfile: apps/api/Dockerfile
             context: .
-            platforms: linux/amd64,linux/arm64
-          - name: web
+            platform: linux/amd64
+            arch_suffix: amd64
+          - service: api
+            dockerfile: apps/api/Dockerfile
+            context: .
+            platform: linux/arm64
+            arch_suffix: arm64
+          # Web service
+          - service: web
             dockerfile: web/Dockerfile
             context: web
-            platforms: linux/amd64,linux/arm64
-          - name: python-app
+            platform: linux/amd64
+            arch_suffix: amd64
+          - service: web
+            dockerfile: web/Dockerfile
+            context: web
+            platform: linux/arm64
+            arch_suffix: arm64
+          # Python app service
+          - service: python-app
             dockerfile: apps/web/Dockerfile
             context: .
-            platforms: linux/amd64,linux/arm64
+            platform: linux/amd64
+            arch_suffix: amd64
+          - service: python-app
+            dockerfile: apps/web/Dockerfile
+            context: .
+            platform: linux/arm64
+            arch_suffix: arm64
 
     steps:
     - name: Checkout code
-      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
+
+    - name: Set up QEMU
+      uses: docker/setup-qemu-action@ce360397dd3f832beb865e1373c09c0e9f86d70a  # v4
 
     - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3
+      uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd  # v4
 
     - name: Log in to Container Registry
       if: github.event_name != 'pull_request'
-      uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3
+      uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121  # v4
       with:
         registry: ${{ env.REGISTRY }}
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Extract metadata (tags, labels)
-      id: meta
-      uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051  # v5
-      with:
-        images: ${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.service.name }}
-        tags: |
-          type=ref,event=branch
-          type=ref,event=pr
-          type=semver,pattern={{version}}
-          type=semver,pattern={{major}}.{{minor}}
-          type=semver,pattern={{major}}
-          type=raw,value=latest,enable={{is_default_branch}}
-          type=sha,prefix={{branch}}-,suffix=-{{date 'YYYYMMDD'}},format=short
+    - name: Determine version tag
+      id: version
+      run: |
+        if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+          VERSION=${GITHUB_REF_NAME}
+        elif [[ "${{ github.ref }}" == refs/heads/main ]]; then
+          VERSION="gamma-$(date +%s | tail -c 10)"
+        elif [[ "${{ github.ref }}" == refs/heads/release/* ]]; then
+          VERSION="beta-$(date +%s | tail -c 10)"
+        else
+          VERSION="alpha-$(date +%s | tail -c 10)"
+        fi
+        echo "VERSION=${VERSION}" >> $GITHUB_OUTPUT
 
-    - name: Build and push Docker image
-      uses: docker/build-push-action@v5
+    - name: Build and push Docker image (${{ matrix.service }}-${{ matrix.arch_suffix }})
+      uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f  # v7
       with:
-        context: ${{ matrix.service.context }}
-        file: ${{ matrix.service.dockerfile }}
-        platforms: ${{ matrix.service.platforms }}
+        context: ${{ matrix.context }}
+        file: ${{ matrix.dockerfile }}
+        platforms: ${{ matrix.platform }}
         push: ${{ github.event_name != 'pull_request' }}
-        tags: ${{ steps.meta.outputs.tags }}
-        labels: ${{ steps.meta.outputs.labels }}
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
+        tags: |
+          ${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.service }}:${{ steps.version.outputs.VERSION }}-${{ matrix.arch_suffix }}
+        labels: |
+          org.opencontainers.image.title=${{ matrix.service }}
+          org.opencontainers.image.version=${{ steps.version.outputs.VERSION }}
+          org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+          org.opencontainers.image.revision=${{ github.sha }}
+          org.opencontainers.image.created=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
+        cache-from: type=gha,scope=${{ matrix.service }}-${{ matrix.arch_suffix }}
+        cache-to: type=gha,mode=max,scope=${{ matrix.service }}-${{ matrix.arch_suffix }}
         build-args: |
-          BUILD_DATE=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.created'] }}
+          BUILD_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
           VCS_REF=${{ github.sha }}
-          VERSION=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.version'] }}
+          VERSION=${{ steps.version.outputs.VERSION }}
+
+  # Merge platform images into multi-arch manifest (skip on PR)
+  merge-manifests:
+    needs: build-platform
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request'
+    strategy:
+      matrix:
+        service: [api, web, python-app]
+
+    steps:
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd  # v4
+
+    - name: Log in to Container Registry
+      uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121  # v4
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Determine version tag
+      id: version
+      run: |
+        if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+          MAIN_TAG=${GITHUB_REF_NAME}
+          LATEST_TAG="latest"
+        elif [[ "${{ github.ref }}" == refs/heads/main ]]; then
+          MAIN_TAG="gamma-$(date +%s | tail -c 10)"
+          LATEST_TAG=""
+        elif [[ "${{ github.ref }}" == refs/heads/release/* ]]; then
+          MAIN_TAG="beta-$(date +%s | tail -c 10)"
+          LATEST_TAG=""
+        else
+          MAIN_TAG="alpha-$(date +%s | tail -c 10)"
+          LATEST_TAG=""
+        fi
+        echo "MAIN_TAG=${MAIN_TAG}" >> $GITHUB_OUTPUT
+        echo "LATEST_TAG=${LATEST_TAG}" >> $GITHUB_OUTPUT
+
+    - name: Create and push manifest (${{ matrix.service }})
+      run: |
+        MAIN_TAG="${{ steps.version.outputs.MAIN_TAG }}"
+        LATEST_TAG="${{ steps.version.outputs.LATEST_TAG }}"
+        REGISTRY_IMAGE="${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.service }}"
+        docker buildx imagetools create \
+          -t "${REGISTRY_IMAGE}:${MAIN_TAG}" \
+          "${REGISTRY_IMAGE}:${MAIN_TAG}-amd64" \
+          "${REGISTRY_IMAGE}:${MAIN_TAG}-arm64"
+        if [ -n "${LATEST_TAG}" ]; then
+          docker buildx imagetools create \
+            -t "${REGISTRY_IMAGE}:${LATEST_TAG}" \
+            "${REGISTRY_IMAGE}:${MAIN_TAG}-amd64" \
+            "${REGISTRY_IMAGE}:${MAIN_TAG}-arm64"
+        fi
 
   # Security scanning of built images
   security-scan:
-    needs: build-and-push
+    needs: merge-manifests
     runs-on: ubuntu-latest
     if: github.event_name != 'pull_request'
     strategy:
@@ -89,31 +174,29 @@ jobs:
 
     steps:
     - name: Run Trivy vulnerability scanner
-      uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1  # v0.35.0
-        with:
-          trivy-version: 'v0.69.3'
+      uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
       with:
         image-ref: ${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.service }}:${{ github.ref_name }}
         format: 'sarif'
         output: 'trivy-results-${{ matrix.service }}.sarif'
 
     - name: Upload Trivy scan results
-      uses: github/codeql-action/upload-sarif@ebcb5b36ded6beda4ceefea6a8bc4cc885255bb3  # v3
+      uses: github/codeql-action/upload-sarif@95e58e9a2cdfd71adc6e0353d5c52f41a045d225  # v4
       with:
         sarif_file: 'trivy-results-${{ matrix.service }}.sarif'
 
   # Integration test with built images
   integration-test:
-    needs: build-and-push
+    needs: merge-manifests
     runs-on: ubuntu-latest
     if: github.event_name != 'pull_request'
 
     steps:
     - name: Checkout code
-      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
 
     - name: Log in to Container Registry
-      uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3
+      uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121  # v4
       with:
         registry: ${{ env.REGISTRY }}
         username: ${{ github.actor }}
@@ -207,51 +290,38 @@ jobs:
     - name: Start test environment
       run: |
         docker-compose -f docker-compose.test.yml up -d
-        sleep 60  # Wait for all services to be healthy
+        sleep 60
 
     - name: Test API endpoints
       run: |
-        # Test health endpoints
         curl -f http://localhost:8080/health
         curl -f http://localhost:8080/metrics
         curl -f http://localhost:3000/health
         curl -f http://localhost:8000/health
-
-        # Test API functionality
         response=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/api/v1/status)
         if [ "$response" != "200" ]; then
           echo "API status endpoint failed with code: $response"
           exit 1
         fi
-
-        # Test feature endpoints (should return proper responses)
         response=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/api/v1/features)
         if [ "$response" != "200" ]; then
           echo "Features endpoint failed with code: $response"
           exit 1
         fi
-
-        # Test license integration
         response=$(curl -s http://localhost:8080/api/v1/features | jq -r '.features | length')
         if [ "$response" = "null" ]; then
           echo "License integration test failed"
           exit 1
         fi
-
         echo "All integration tests passed"
 
     - name: Check container logs on failure
       if: failure()
       run: |
-        echo "=== API Logs ==="
         docker-compose -f docker-compose.test.yml logs api
-        echo "=== Web Logs ==="
         docker-compose -f docker-compose.test.yml logs web
-        echo "=== Python App Logs ==="
         docker-compose -f docker-compose.test.yml logs python-app
-        echo "=== Database Logs ==="
         docker-compose -f docker-compose.test.yml logs postgres
-        echo "=== Redis Logs ==="
         docker-compose -f docker-compose.test.yml logs redis
 
     - name: Cleanup test environment
@@ -268,10 +338,10 @@ jobs:
 
     steps:
     - name: Checkout code
-      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
 
     - name: Log in to Container Registry
-      uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3
+      uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121  # v4
       with:
         registry: ${{ env.REGISTRY }}
         username: ${{ github.actor }}
@@ -279,16 +349,12 @@ jobs:
 
     - name: Run performance tests with k6
       run: |
-        # Start minimal test environment
         docker run -d --name api-perf \
           -p 8080:8080 \
           -e LICENSE_KEY=PENG-TEST-TEST-TEST-TEST-ABCD \
           -e PRODUCT_NAME=perf-test \
           ${{ env.REGISTRY }}/${{ github.repository }}/api:${{ github.ref_name }}
-
         sleep 10
-
-        # Run k6 performance tests
         docker run --rm --network=host \
           -v ${{ github.workspace }}/tests/performance:/scripts \
           grafana/k6:latest run /scripts/load-test.js || true
@@ -301,13 +367,13 @@ jobs:
 
   # Release creation
   release:
-    needs: [build-and-push, security-scan, integration-test]
+    needs: [merge-manifests, security-scan, integration-test]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
 
     steps:
     - name: Checkout code
-      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
       with:
         fetch-depth: 0
 
@@ -315,25 +381,19 @@ jobs:
       id: changelog
       run: |
         echo "## What's Changed" > CHANGELOG.md
-
-        # Get previous tag
         PREVIOUS_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
-
         if [ -n "$PREVIOUS_TAG" ]; then
           echo "### Features" >> CHANGELOG.md
           git log --pretty=format:"* %s (%h)" "$PREVIOUS_TAG"..HEAD --grep="feat:" --grep="feature:" >> CHANGELOG.md || true
           echo "" >> CHANGELOG.md
-
           echo "### Bug Fixes" >> CHANGELOG.md
           git log --pretty=format:"* %s (%h)" "$PREVIOUS_TAG"..HEAD --grep="fix:" --grep="bug:" >> CHANGELOG.md || true
           echo "" >> CHANGELOG.md
-
           echo "### Other Changes" >> CHANGELOG.md
           git log --pretty=format:"* %s (%h)" "$PREVIOUS_TAG"..HEAD --invert-grep --grep="feat:" --grep="feature:" --grep="fix:" --grep="bug:" >> CHANGELOG.md || true
         else
           git log --pretty=format:"* %s (%h)" >> CHANGELOG.md
         fi
-
         echo "" >> CHANGELOG.md
         echo "### Docker Images" >> CHANGELOG.md
         echo "- \`${{ env.REGISTRY }}/${{ github.repository }}/api:${GITHUB_REF_NAME}\`" >> CHANGELOG.md
@@ -355,17 +415,16 @@ jobs:
 
   # Cleanup old images
   cleanup:
-    needs: [build-and-push, security-scan, integration-test]
+    needs: [merge-manifests, security-scan, integration-test]
     runs-on: ubuntu-latest
     if: always()
 
     steps:
     - name: Delete untagged images
-      uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b  # v7
+      uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9
       with:
         script: |
           const services = ['api', 'web', 'python-app'];
-
           for (const service of services) {
             try {
               const response = await github.rest.packages.getAllPackageVersionsForPackageOwnedByOrg({
@@ -374,11 +433,9 @@ jobs:
                 org: context.repo.owner,
                 per_page: 100
               });
-
               const untaggedVersions = response.data.filter(version =>
                 version.metadata.container.tags.length === 0
               );
-
               for (const version of untaggedVersions) {
                 console.log(`Deleting untagged version: ${version.id} for ${service}`);
                 await github.rest.packages.deletePackageVersionForOrg({
