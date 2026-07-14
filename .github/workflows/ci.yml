@@ -59,5 +59,12 @@ jobs:
         run: |
           make build
           go build -o /tmp/plugin-hello ./examples/plugin-hello
+      - name: Cross-compile Windows target (pure-Go; catches _windows.go breakage)
+        # penguin-tray is excluded — it needs cgo and is built natively in release-tray.yml.
+        env:
+          GOOS: windows
+          GOARCH: amd64
+          CGO_ENABLED: '0'
+        run: go build ./cmd/penguind ./cmd/penguin ./internal/... ./pkg/...
       - name: Smoke test
         run: make smoke-test

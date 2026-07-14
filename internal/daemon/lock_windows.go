@@ -5,7 +5,6 @@ package daemon
 
 import (
 	"fmt"
-	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
@@ -42,7 +41,7 @@ func AcquireLock(path string) (func() error, error) {
 		return nil, fmt.Errorf("wait for mutex: %w", err)
 	}
 
-	if waitResult == windows.WAIT_TIMEOUT {
+	if waitResult == uint32(windows.WAIT_TIMEOUT) {
 		windows.CloseHandle(handle)
 		return nil, fmt.Errorf("penguind already running: mutex %q is locked", path)
 	}
@@ -50,8 +49,8 @@ func AcquireLock(path string) (func() error, error) {
 	// Mutex is acquired; return a release function
 	release := func() error {
 		defer windows.CloseHandle(handle)
-		if !windows.ReleaseMutex(handle) {
-			return fmt.Errorf("release mutex: %w", windows.GetLastError())
+		if err := windows.ReleaseMutex(handle); err != nil {
+			return fmt.Errorf("release mutex: %w", err)
 		}
 		return nil
 	}

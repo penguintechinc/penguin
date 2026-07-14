@@ -1,0 +1,66 @@
+# Release: Windows MSI
+#
+# On a version tag, cross-nothing — build penguind.exe + penguin.exe natively for
+# windows/amd64, package them into an MSI with WiX v5, and upload it to the GitHub
+# Release. Runs on windows-latest because WiX's MSI Bind backend P/Invokes the
+# Windows-only msi.dll and therefore cannot emit an .msi on Linux/macOS.
+#
+# Actions pinned to commit SHAs per policy.
+name: Release Windows MSI
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-msi:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: '1.25'
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Install WiX v5
+        run: dotnet tool install --global wix --version 5.0.2
+
+      - name: Build Windows binaries
+        env:
+          GOOS: windows
+          GOARCH: amd64
+          CGO_ENABLED: '0'
+        run: |
+          New-Item -ItemType Directory -Force -Path staging | Out-Null
+          go build -o staging/penguind.exe ./cmd/penguind
+          go build -o staging/penguin.exe ./cmd/penguin
+
+      - name: Derive version from tag
+        id: ver
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          $v = "$env:TAG" -replace '^v', ''
+          "version=$v" >> $env:GITHUB_OUTPUT
+
+      - name: Build MSI
+        run: >
+          wix build packaging/windows/penguind.wxs
+          -d Version=${{ steps.ver.outputs.version }}
+          -b staging -arch x64 -o penguind.msi
+
+      # TODO(signing): the MSI is UNSIGNED. Once a PenguinTech Authenticode
+      # code-signing certificate is provisioned, sign before upload:
+      #   signtool sign /fd SHA256 /f cert.pfx /p $env:CERT_PW /tr <timestamp-url> /td SHA256 penguind.msi
+
+      - name: Upload MSI to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: gh release upload "$env:TAG" penguind.msi --repo penguintechinc/penguin --clobber

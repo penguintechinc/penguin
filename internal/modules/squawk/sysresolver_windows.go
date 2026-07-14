@@ -42,7 +42,7 @@ func (r *resolver) applyPlatform(ctx context.Context, servers []netip.Addr) erro
 		cmd := exec.CommandContext(ctx, "netsh", args...)
 		if err := cmd.Run(); err != nil {
 			r.logger.Warn("failed to set DNS for interface",
-				fmt.Sprintf("interface=%s err=%v", iface, err))
+				zap.String("interface", iface), zap.Error(err))
 		}
 	}
 
@@ -62,7 +62,7 @@ func (r *resolver) restorePlatform(ctx context.Context, servers []netip.Addr) er
 		cmd := exec.CommandContext(ctx, "netsh", "interface", "ip", "set", "dnsservers", "name="+iface, "dhcp")
 		if err := cmd.Run(); err != nil {
 			r.logger.Warn("failed to restore DNS for interface",
-				fmt.Sprintf("interface=%s err=%v", iface, err))
+				zap.String("interface", iface), zap.Error(err))
 		}
 	}
 

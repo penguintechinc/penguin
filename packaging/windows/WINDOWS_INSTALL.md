@@ -2,15 +2,42 @@
 
 ## Penguin (CLI) and Penguind (Daemon)
 
-Windows builds are distributed as **ZIP archives** containing the executables. These are built by goreleaser and published to GitHub Releases.
+### Primary: MSI installer (recommended)
 
-### Installation
+The MSI is the primary Windows install path. It installs both `penguind.exe` and
+`penguin.exe` into `C:\Program Files\Penguin\` and registers `penguind` as an
+auto-start Windows service (Penguin Daemon, LocalSystem) via the Windows Installer.
+
+Download `penguind.msi` from [GitHub Releases](https://github.com/penguintechinc/penguin/releases), then:
+
+```powershell
+# Interactive (double-click penguind.msi) — or silent:
+msiexec /i penguind.msi /qn
+
+# Uninstall (stops + removes the penguind service, removes files):
+msiexec /x penguind.msi /qn
+```
+
+The MSI is built by the `Release Windows MSI` GitHub Actions workflow
+(`.github/workflows/release-windows-msi.yml`) using WiX v5 on `windows-latest`.
+The WiX source lives at `packaging/windows/penguind.wxs`.
+
+> Note: WiX v5's MSI Bind backend requires the Windows-only `msi.dll`, so the MSI
+> can only be produced on Windows (the CI runner), not on Linux/macOS.
+
+> The published MSI is currently **unsigned** — see the signing TODO below.
+
+### Alternative: ZIP + manual service registration
+
+Windows builds are also distributed as **ZIP archives** containing the executables,
+built by goreleaser and published to GitHub Releases.
 
 1. Download `penguin_<version>_windows_amd64.zip` or `penguin_<version>_windows_arm64.zip` from [GitHub Releases](https://github.com/penguintechinc/penguin/releases)
 2. Extract the ZIP file to your desired location (e.g., `C:\Program Files\Penguin\`)
 3. Add the directory to your system `PATH` environment variable
+4. Register the service manually with `penguind service install` (see below)
 
-### Penguind as a Service
+### Penguind as a Service (ZIP path)
 
 Penguind supports Windows service registration via the [kardianos/service](https://github.com/kardianos/service) package, built into the daemon. To install penguind as a Windows service:
 
@@ -70,6 +97,7 @@ Penguin Tray is built separately from goreleaser due to cgo requirements (OS-nat
 
 ### TODO: Future Enhancements
 
+- [ ] Code sign the `penguind.msi` with a PenguinTech Authenticode certificate (`signtool sign /fd SHA256 ...`); see the signing TODO in `.github/workflows/release-windows-msi.yml` and `packaging/windows/penguind.wxs`
 - [ ] Code sign tray binaries with PenguinTech certificate (requires infrastructure setup)
 - [ ] Create WiX-based `.msi` installer for tray (optional; `.exe` + service registration sufficient for now)
 - [ ] Add Windows service wrapper for tray (currently manual startup or shell shortcut)

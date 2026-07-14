@@ -3,11 +3,13 @@
 package ipc
 
 import (
+	"context"
 	"fmt"
 	"net"
 
 	"github.com/Microsoft/go-winio"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 // ListenerConfig configures a named pipe listener (Windows).
@@ -35,5 +37,18 @@ func Listen(cfg ListenerConfig) (net.Listener, grpc.ServerOption, error) {
 	}
 
 	// Return insecure credentials for Windows (transport is OS boundary)
-	return listener, grpc.WithInsecure(), nil
+	return listener, grpc.Creds(insecure.NewCredentials()), nil
+}
+
+// PeerAuthInterceptor returns no-op interceptors for Windows.
+// On Windows, access control is handled by the named pipe SDDL (Discretionary Access Control List),
+// so additional peer authentication is not needed (unlike Unix socket SO_PEERCRED checks).
+func PeerAuthInterceptor(allowedGroup string) (grpc.UnaryServerInterceptor, grpc.StreamServerInterceptor) {
+	unary := func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
+		return handler(ctx, req)
+	}
+	stream := func(srv interface{}, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+		return handler(srv, ss)
+	}
+	return unary, stream
 }

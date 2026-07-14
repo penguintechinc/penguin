@@ -4,7 +4,6 @@ package ipc
 
 import (
 	"context"
-	"fmt"
 	"net"
 
 	"github.com/Microsoft/go-winio"
