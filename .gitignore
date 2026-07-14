@@ -11,6 +11,15 @@ Thumbs.db
 
 # Build artifacts
 bin/
+# Binaries accidentally built into the repo root (build to ./bin via `make build`)
+/penguind
+/penguin
+/penguin-tray
+/pcli
+/plugin-hello
+*.exe
+*.msi
+coverage.filtered.out
 dist/
 coverage.out
 coverage.unit.out
