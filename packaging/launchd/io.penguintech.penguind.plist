@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- penguind system daemon for macOS. Install to
+     /Library/LaunchDaemons/io.penguintech.penguind.plist and load with
+     `sudo launchctl load -w <path>`. Runs as root (hardened runtime) because
+     tunnel + resolver management require it on macOS. -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>io.penguintech.penguind</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/penguind</string>
+        <string>--config-dir</string>
+        <string>/etc/penguin</string>
+        <string>--state-dir</string>
+        <string>/var/lib/penguind</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+    <key>StandardErrorPath</key>
+    <string>/var/log/penguind.log</string>
+    <key>StandardOutPath</key>
+    <string>/var/log/penguind.log</string>
+</dict>
+</plist>

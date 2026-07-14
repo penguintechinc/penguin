@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- WiX MSI Template for Penguind on Windows
+     DEFERRED: This template is provided as a reference for future MSI packaging.
+     Current supported installation method: ZIP + PowerShell service registration.
+
+     To use this template:
+     1. Requires WiX Toolset v4 installation
+     2. Install via: dotnet tool install --global wix
+     3. Integrate into build pipeline: wix build -o penguind.msi penguind.wxs
+     4. Sign MSI: signtool.exe sign /f cert.pfx /p password penguind.msi
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxl" xmlns:ui="http://wixtoolset.org/schemas/v4/wxl/ui">
+  <Product Id="*" Name="Penguin Daemon" Language="1033" Version="!(bind.FileVersion.penguind_exe)">
+    <Package InstallScope="perMachine" Compressed="yes" />
+
+    <Feature Id="ProductFeature" Title="Penguin Daemon" Level="1">
+      <ComponentRef Id="penguind_exe" />
+      <ComponentRef Id="SystemPath" />
+      <ComponentRef Id="ServiceInstall" />
+    </Feature>
+
+    <!-- Binaries -->
+    <StandardDirectory Id="ProgramFilesFolder">
+      <Directory Id="ProgramFilesDir" Name="Penguin">
+        <Directory Id="InstallFolder" />
+      </Directory>
+    </StandardDirectory>
+
+    <!-- Executable -->
+    <Fragment>
+      <ComponentGroup Id="binaries">
+        <Component Id="penguind_exe" Directory="InstallFolder" Bitness="always64">
+          <File Id="penguind_exe" Source="penguind.exe" />
+          <ServiceInstall Id="ServiceInstall" Type="ownProcess" Name="penguind" DisplayName="Penguin Daemon"
+                          Description="PenguinTech unified endpoint agent daemon" Start="auto" Account="LocalSystem" />
+          <ServiceControl Id="ServiceControl" Name="penguind" Stop="both" Remove="uninstall" Wait="yes" />
+        </Component>
+      </ComponentGroup>
+    </Fragment>
+
+    <!-- Add to PATH -->
+    <Fragment>
+      <ComponentGroup Id="path_fragment">
+        <Component Id="SystemPath" Directory="InstallFolder" KeyPath="yes">
+          <Environment Id="PATH" Name="PATH" Value="[InstallFolder]" Permanent="no" Part="last" System="yes" Action="set" />
+        </Component>
+      </ComponentGroup>
+    </Fragment>
+  </Product>
+</Wix>

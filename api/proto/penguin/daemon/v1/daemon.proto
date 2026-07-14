@@ -1,0 +1,145 @@
+// Daemon IPC contract between the penguin CLI / penguin-tray and penguind.
+// Served over an authenticated local transport only (unix socket / named
+// pipe) — never a network port.
+syntax = "proto3";
+
+package penguin.daemon.v1;
+
+option go_package = "github.com/penguintechinc/penguin/api/proto/penguin/daemon/v1;daemonv1";
+
+service Daemon {
+  // api_version is carried in every request per PenguinTech gRPC standards;
+  // unknown versions return UNIMPLEMENTED.
+  rpc Version(VersionRequest) returns (VersionResponse);
+  rpc ListModules(ListModulesRequest) returns (ListModulesResponse);
+  rpc LoadModule(LoadModuleRequest) returns (LoadModuleResponse);
+  rpc UnloadModule(UnloadModuleRequest) returns (UnloadModuleResponse);
+  rpc GetStatus(GetStatusRequest) returns (GetStatusResponse);
+  rpc ListCommands(ListCommandsRequest) returns (ListCommandsResponse);
+  rpc Dispatch(DispatchRequest) returns (stream DispatchChunk);
+  rpc WatchEvents(WatchEventsRequest) returns (stream Event);
+  rpc TailLogs(TailLogsRequest) returns (stream LogLine);
+  rpc CheckUpdate(CheckUpdateRequest) returns (CheckUpdateResponse);
+  rpc ApplyUpdate(ApplyUpdateRequest) returns (ApplyUpdateResponse);
+}
+
+message VersionRequest { string api_version = 1; }
+message VersionResponse {
+  string daemon_version = 1;
+  string api_version = 2;
+}
+
+message ListModulesRequest { string api_version = 1; }
+message ModuleSummary {
+  string name = 1;
+  string version = 2;
+  string description = 3;
+  string state = 4;           // sdk.ModuleState string
+  bool   external = 5;        // true for verified external plugins
+  string license_feature = 6;
+}
+message ListModulesResponse { repeated ModuleSummary modules = 1; }
+
+message LoadModuleRequest {
+  string api_version = 1;
+  string name = 2;
+}
+message LoadModuleResponse { string state = 1; }
+
+message UnloadModuleRequest {
+  string api_version = 1;
+  string name = 2;
+}
+message UnloadModuleResponse { string state = 1; }
+
+message GetStatusRequest {
+  string api_version = 1;
+  string name = 2;            // empty = all modules + daemon summary
+}
+message ModuleStatus {
+  string name = 1;
+  string state = 2;
+  map<string, string> detail = 3;
+  string health = 4;          // healthy | degraded | unhealthy
+  string health_message = 5;
+  int64 checked_at_unix_nano = 6;
+}
+message GetStatusResponse {
+  string daemon_version = 1;
+  repeated ModuleStatus modules = 2;
+}
+
+message ListCommandsRequest { string api_version = 1; }
+message FlagSpec {
+  string name = 1;
+  string shorthand = 2;
+  string usage = 3;
+  string default = 4;
+  string type = 5;            // string | bool | int
+}
+message CommandSpec {
+  string name = 1;
+  string use = 2;
+  string short = 3;
+  repeated FlagSpec flags = 4;
+  repeated CommandSpec subcommands = 5;
+  bool tray = 6;
+  int32 min_args = 7;
+  int32 max_args = 8;
+}
+message ModuleCommands {
+  string module = 1;
+  repeated CommandSpec commands = 2;
+}
+message ListCommandsResponse { repeated ModuleCommands modules = 1; }
+
+message DispatchRequest {
+  string api_version = 1;
+  string module = 2;
+  repeated string path = 3;
+  map<string, string> flags = 4;
+  repeated string args = 5;
+}
+message DispatchChunk {
+  string output = 1;          // human-readable text chunk
+  bytes json = 2;             // machine-readable payload (final chunk)
+  int32 exit_code = 3;        // meaningful on final chunk
+  bool final = 4;
+}
+
+message WatchEventsRequest {
+  string api_version = 1;
+  string module = 2;          // empty = all modules
+}
+message Event {
+  string module = 1;
+  string type = 2;            // state-changed | health | info | error
+  string message = 3;
+  int64 at_unix_nano = 4;
+  map<string, string> fields = 5;
+}
+
+message TailLogsRequest {
+  string api_version = 1;
+  string module = 2;          // empty = daemon
+  int32 lines = 3;            // initial backlog
+  bool follow = 4;
+}
+message LogLine {
+  int64 at_unix_nano = 1;
+  string level = 2;
+  string message = 3;
+}
+
+message CheckUpdateRequest { string api_version = 1; }
+message CheckUpdateResponse {
+  bool available = 1;
+  string current_version = 2;
+  string latest_version = 3;
+}
+
+message ApplyUpdateRequest { string api_version = 1; }
+message ApplyUpdateResponse {
+  bool applied = 1;
+  string message = 2;
+}
