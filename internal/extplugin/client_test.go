@@ -35,6 +35,28 @@ func clampInt32(v int) int32 {
 	}
 }
 
+// repoRoot walks up from the test's working directory (the package dir, per
+// `go test` semantics) to the Go module root — the directory containing go.mod.
+// This keeps the E2E test portable across checkouts and CI containers instead
+// of hardcoding an absolute path.
+func repoRoot(t *testing.T) string {
+	t.Helper()
+	dir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	for {
+		if _, statErr := os.Stat(filepath.Join(dir, "go.mod")); statErr == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			t.Fatal("go.mod not found walking up from test working directory")
+		}
+		dir = parent
+	}
+}
+
 // TestLoadExternalPluginE2E tests loading and running an external plugin via subprocess.
 // This test is skipped if -short is set (can be unreliable in CI).
 func TestLoadExternalPluginE2E(t *testing.T) {
@@ -50,7 +72,7 @@ func TestLoadExternalPluginE2E(t *testing.T) {
 
 	exePath := filepath.Join(exeDir, "plugin-hello")
 	cmd := exec.Command("go", "build", "-o", exePath, "./examples/plugin-hello") // #nosec G204 -- hardcoded command and args, only output path is variable
-	cmd.Dir = "/home/penguin/code/penguin" // Repo root
+	cmd.Dir = repoRoot(t) // module root, discovered portably (works in CI/containers)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("build plugin: %v\n%s", err, output)
 	}

@@ -33,7 +33,9 @@ coverage.intfiltered.out
 *.key
 *.pem
 credentials.json
-secrets/
+# Root-anchored: ignore a top-level real-secrets dir only. A bare `secrets/`
+# also matched the internal/secrets source package and left it untracked.
+/secrets/
 
 # Local state
 .PLAN
