@@ -1,135 +1,70 @@
-[![CI](https://github.com/PenguinCloud/project-template/actions/workflows/ci.yml/badge.svg)](https://github.com/PenguinCloud/project-template/actions/workflows/ci.yml)
-[![Docker Build](https://github.com/PenguinCloud/project-template/actions/workflows/docker-build.yml/badge.svg)](https://github.com/PenguinCloud/project-template/actions/workflows/docker-build.yml)
-[![codecov](https://codecov.io/gh/PenguinCloud/project-template/branch/main/graph/badge.svg)](https://codecov.io/gh/PenguinCloud/project-template)
-[![Go Report Card](https://goreportcard.com/badge/github.com/PenguinCloud/project-template)](https://goreportcard.com/report/github.com/PenguinCloud/project-template)
-[![version](https://img.shields.io/badge/version-5.1.1-blue.svg)](https://semver.org)
 [![License](https://img.shields.io/badge/License-Limited%20AGPL3-blue.svg)](LICENSE.md)
 
 ```
- ____            _           _     _____                    _       _
-|  _ \ _ __ ___ (_) ___  ___| |_  |_   _|__ _ __ ___  _ __ | | __ _| |_ ___
-| |_) | '__/ _ \| |/ _ \/ __| __|   | |/ _ \ '_ ` _ \| '_ \| |/ _` | __/ _ \
-|  __/| | | (_) | |  __/ (__| |_    | |  __/ | | | | | |_) | | (_| | ||  __/
-|_|   |_|  \___/| |\___|\___|\__|   |_|\___|_| |_| |_| .__/|_|\__,_|\__\___|
-               _/ |                                  |_|
-              |__/
+                                    _
+    ____  ___  ____  ____ ___  __(_)___
+   / __ \/ _ \/ __ \/ __ `/ / / / / __ \
+  / /_/ /  __/ / / / /_/ / /_/ / / / / /
+ / .___/\___/_/ /_/\__, /\__,_/_/_/ /_/
+/_/               /____/     endpoint agent
 ```
 
-# 🏗️ Enterprise Project Template
+# Penguin — Unified Endpoint Agent
 
-**The Ultimate Multi-Language Development Foundation**
+One hardened desktop/endpoint agent for all PenguinTech products. Product
+clients (Tobogganing SASE/ZTNA, Squawk DoH, and future products) are **modules**
+on a shared secure core: auth, licensing/feature flags, secure storage, config,
+metrics, tray, self-update, and packaging are written once.
 
-This comprehensive project template provides a production-ready foundation for enterprise software development, incorporating best practices from Penguin Tech Inc projects. Built with security, scalability, and developer experience at its core, it offers standardized tooling for Go, Python, and Node.js applications with integrated licensing, monitoring, and enterprise-grade infrastructure.
-## ✨ Why Choose This Template?
+## Components
 
-### 🏭 Enterprise-Ready Architecture
-Built for production from day one with multi-language support (Go 1.24+, Python 3.12/3.13, Node.js 18+), comprehensive CI/CD pipelines, and enterprise-grade security scanning.
+| Binary | Role | Privileges |
+|---|---|---|
+| `penguind` | Daemon hosting all modules; owns every privileged operation (tunnels, port 53, resolver changes) | System service, least-privilege capabilities |
+| `penguin` | CLI; talks to the daemon over authenticated local IPC | Unprivileged |
+| `penguin-tray` | System tray with per-module status/actions | Unprivileged, user session |
 
-### 🔒 Security First
-- **8-stage security validation** including Trivy, CodeQL, and Semgrep scanning
-- **TLS 1.2 minimum enforcement**, preferring TLS 1.3
-- **Automated vulnerability detection** with Dependabot and Socket.dev integration
-- **Secrets management** with environment-based configuration
-
-### 🚀 Performance Optimized
-- **Multi-architecture Docker builds** (amd64/arm64) with Debian-slim base images
-- **Parallel CI/CD workflows** for optimized build times
-- **eBPF/XDP networking** support for high-performance applications
-- **Connection pooling** and caching strategies built-in
-
-### 🏢 PenguinTech License Server Integration
-- **Centralized feature gating** with `https://license.penguintech.io`
-- **Universal JSON response format** across all products
-- **Multi-tier licensing** (community/professional/enterprise)
-- **Usage tracking and compliance** reporting
-
-### 🔄 Self-Healing & Monitoring
-- **Built-in health checks** and self-healing capabilities
-- **Prometheus metrics** and Grafana dashboard integration
-- **Structured logging** with configurable verbosity levels
-- **Real-time monitoring** and alerting
-
-### 🌐 Multi-Environment Support
-- **Air-gapped deployment** ready with local caching
-- **Container orchestration** with Kubernetes and Helm
-- **Environment-specific configurations** for dev/staging/production
-- **Blue-green deployment** support with automated rollbacks
-
-## 🛠️ Quick Start
+## CLI
 
 ```bash
-# Clone and setup
-git clone <your-repository-url>
-cd your-project
-make setup                    # Install dependencies and setup environment
-make dev                      # Start development environment
+penguin modules                 # list modules and states
+penguin load <module>           # enable + start a module (persists)
+penguin unload <module>         # stop + disable a module
+penguin status [module]         # agent or per-module status
+penguin <module> <command>      # module commands, e.g.:
+penguin tobogganing connect
+penguin squawk query example.com
+penguin logs [module]
+penguin update                  # signed self-update
+penguin version
 ```
 
-## 📚 Key Components
+## Module framework
 
-### Core Technologies
-- **Languages**: Go 1.24+, Python 3.12/3.13, Node.js 18+
-- **Databases**: PostgreSQL with PyDAL/GORM, Redis/Valkey caching
-- **Containers**: Docker with multi-stage builds, Kubernetes deployment
-- **Monitoring**: Prometheus, Grafana, structured logging
-- **Teams Management**: Team-based multi-tenancy with role-based access control
+Every product implements one interface (`pkg/sdk.Module`) — lifecycle,
+status/health, a declarative CLI command tree, and a config schema. Modules are
+either:
 
-### Security Features
-- Multi-factor authentication (MFA) and JWT tokens
-- Role-based access control (RBAC) with team-scoped permissions
-- Team-based multi-tenancy with invitations and member management
-- Automated security scanning and vulnerability management
-- Compliance audit logging (SOC2, ISO27001 ready)
+- **Compiled-in** — one registry line in `internal/registry`; or
+- **External plugins** — separate binaries verified with pinned minisign
+  publisher keys before launch (see `docs/APP_STANDARDS.md`).
 
-### Development Workflow
-- Comprehensive test coverage (unit, integration, e2e)
-- Automated code quality checks (linting, formatting, type checking)
-- Version management with semantic versioning
-- Feature branch workflow with required reviews
+Adding a new product client = implement the interface + one registry line.
 
-## 📖 Documentation
+## Development
 
-- **Getting Started**: [docs/development/](docs/development/)
-- **API Reference**: [docs/api/](docs/api/)
-- **Deployment Guide**: [docs/deployment/](docs/deployment/)
-- **Architecture Overview**: [docs/architecture/](docs/architecture/)
-- **License Integration**: [docs/licensing/](docs/licensing/)
+```bash
+make build        # binaries into ./bin
+make lint         # golangci-lint
+make test         # unit tests, race detector, 90% coverage gate
+make smoke-test   # build + version smoke
+make pre-commit   # full gate
+```
 
-## 🤝 Contributing
+See `docs/APP_STANDARDS.md` for architecture, security model, and the
+dependency risk register. Company standards live in `docs/standards/`.
 
-We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+## Support
 
-### Maintainers
-- **Primary**: creatorsemailhere@penguintech.group
-- **General**: info@penguintech.group
-- **Company**: [www.penguintech.io](https://www.penguintech.io)
-
-### Community Contributors
-- *Your name could be here! Submit a PR to get started.*
-
-## 📞 Support & Resources
-
-- **Documentation**: [./docs/](docs/)
-- **Premium Support**: https://support.penguintech.group
-- **Community Issues**: [GitHub Issues](../../issues)
-- **License Server Status**: https://status.penguintech.io
-
-## 📄 License
-
-This project is licensed under the Limited AGPL3 with preamble for fair use - see [LICENSE.md](docs/LICENSE.md) for details.
-
-**License Highlights:**
-- **Personal & Internal Use**: Free under AGPL-3.0
-- **Commercial Use**: Requires commercial license
-- **SaaS Deployment**: Requires commercial license if providing as a service
-
-### Contributor Employer Exception (GPL-2.0 Grant)
-
-Companies employing official contributors receive GPL-2.0 access to community features:
-
-- **Perpetual for Contributed Versions**: GPL-2.0 rights to versions where the employee contributed remain valid permanently, even after the employee leaves the company
-- **Attribution Required**: Employee must be credited in CONTRIBUTORS, AUTHORS, commit history, or release notes
-- **Future Versions**: New versions released after employment ends require standard licensing
-- **Community Only**: Enterprise features still require a commercial license
-
-This exception rewards contributors by providing lasting fair use rights to their employers. See [LICENSE.md](docs/LICENSE.md) for full terms.
+- support@penguintech.io · https://www.penguintech.io
+- License: Limited AGPL-3.0 — see [LICENSE.md](LICENSE.md)

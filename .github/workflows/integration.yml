@@ -1,0 +1,36 @@
+# Integration tier: runs the privileged, boundary-covering tests that a plain
+# unit run cannot reach — the go-plugin subprocess broker, the SO_PEERCRED socket
+# handshake, the userspace WireGuard device, and the system DNS resolver. Requires
+# NET_ADMIN + /dev/net/tun, so it runs in a privileged container. The coverage gate
+# here (`make test-integration-cover`) counts the boundary code and only excludes
+# generated/cmd/examples. Actions pinned to commit SHAs per policy.
+name: Integration
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  integration:
+    runs-on: ubuntu-latest
+    container:
+      image: golang:1.25-bookworm
+      # --privileged + NET_ADMIN + /dev/net/tun: the tobogganing test brings up a
+      # userspace WireGuard device (embedded wireguard-go, no host kmod needed) and
+      # the squawk test rewrites a namespaced resolv.conf. The container process is
+      # root, so the euid>0 self-skip guards do not trip here.
+      options: --privileged --cap-add=NET_ADMIN --device=/dev/net/tun
+    env:
+      GOFLAGS: -buildvcs=false
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Install netns tooling
+        run: apt-get update && apt-get install -y --no-install-recommends iproute2
+      - name: Integration tests (real subprocess, socket, resolver, WireGuard)
+        run: make test-integration
+      - name: Combined coverage report (boundary counted; informational)
+        run: make test-integration-cover

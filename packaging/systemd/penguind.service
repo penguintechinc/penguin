@@ -1,0 +1,49 @@
+# penguind — PenguinTech endpoint agent daemon.
+# Least-privilege system service: it needs exactly two capabilities
+# (manage network interfaces for tunnels; bind privileged port 53 for the DNS
+# forwarder) and nothing else. Install to /etc/systemd/system/penguind.service.
+[Unit]
+Description=Penguin endpoint agent daemon
+Documentation=https://www.penguintech.io
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/penguind --config-dir /etc/penguin --state-dir /var/lib/penguind
+Restart=on-failure
+RestartSec=5
+
+# Runtime + state directories (systemd creates and owns them).
+RuntimeDirectory=penguin
+RuntimeDirectoryMode=0750
+StateDirectory=penguind
+StateDirectoryMode=0700
+ConfigurationDirectory=penguin
+
+# Identity: a dedicated system user; the `penguin` group gates CLI/tray access
+# to the control socket (see SO_PEERCRED checks in the daemon).
+User=penguind
+Group=penguin
+
+# Least privilege — only what the modules genuinely require.
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
+NoNewPrivileges=true
+
+# Hardening.
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+LockPersonality=true
+# The forwarder module rewrites the system resolver; allow just that path plus
+# the daemon's own dirs (RuntimeDirectory/StateDirectory are writable already).
+ReadWritePaths=/etc/resolv.conf
+
+[Install]
+WantedBy=multi-user.target

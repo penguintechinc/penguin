@@ -1,0 +1,11 @@
+{
+  "platform": "Linux-x86_64",
+  "generated": "2026-03-28T13:27:14Z",
+  "tools": {
+
+    "bandit": {"path": "/home/penguin/.local/bin/bandit", "sha256": "75965de2700e4d4e9256014be7fadcc99287b69634c75836c9e15d04ff9d6211", "version": "bandit 1.8.0"},
+    "shellcheck": {"path": "/usr/bin/shellcheck", "sha256": "4646e83e2b125166060b8efa29fa5854c74ac80965a285739b8844821669d0bd", "version": "ShellCheck - shell script analysis tool"},
+    "flake8": {"path": "/home/penguin/.local/bin/flake8", "sha256": "34899ef067f19f55cc5458c23235bca36b98fc9f0d8ba7c6605a3b6ee5a9424d", "version": "7.1.1 (mccabe: 0.7.0, pycodestyle: 2.12.1, pyflakes: 3.2.0) CPython 3.13.7 on"},
+    "mypy": {"path": "/home/penguin/.local/bin/mypy", "sha256": "ea1dde8a217a635cb8c7611a9b6b7c3e1f3cfef51203b683ef5cbd4f82d25a71", "version": "mypy 1.14.0 (compiled: yes)"}
+  }
+}

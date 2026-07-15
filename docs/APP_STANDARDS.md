@@ -1,197 +1,119 @@
-# Application-Specific Standards
+# Penguin Endpoint Agent — App Standards
 
-**This file contains context specific to this application.** It should be customized for each project forked from the template. The generic `CLAUDE.md` file is kept template-wide and can be updated across all projects without losing app-specific information.
+App-specific architecture and constraints. Company-wide standards:
+`docs/standards/`. Full implementation plan history: see repo issues/PRs.
 
-## Project Context
+## What this is
 
-### Application Name
-[Add your application name here]
+One hardened desktop/endpoint agent for all PenguinTech products. Product
+clients are modules on a shared core (auth, licensing/flags, secrets, config,
+IPC, tray, self-update, packaging). Go 1.25, three binaries:
 
-### Project Description
-[Add a 1-2 paragraph description of what this application does]
+- `penguind` — privileged daemon (system service). Hosts all modules; every
+  privileged op (WireGuard-compatible tunnels, port-53 bind, resolver rewrite)
+  happens here under least-privilege capabilities.
+- `penguin` — unprivileged CLI over authenticated local IPC.
+- `penguin-tray` — unprivileged user-session tray (separate binary; cgo only
+  here, so daemon/CLI stay pure-Go and cross-compilable).
 
-### Key Business Requirements
-- [Add critical business requirements]
-- [Add domain-specific features]
-- [Add compliance or regulatory requirements]
+## Module contract
 
-## Architecture Overview
+`pkg/sdk.Module`: `Info, Init(host), Start, Stop, Status, Health, Commands()
+(declarative CLI tree), Dispatch(path, flags, args), ConfigSchema()`.
+`HostServices` (daemon-injected): sanitized logger, namespaced secrets store,
+license/feature-flag checker, metrics registerer, data dir, event sink.
 
-### Core Services
-[Document the specific containers/services used in this application]
+- **Compiled-in modules**: one factory line in `internal/registry`.
+- **External plugins**: HashiCorp go-plugin (gRPC) binaries under a root-owned
+  plugins dir; verified before launch — manifest → sha256 → minisign signature
+  against **pinned publisher keys (no TOFU)** → SecureConfig + AutoMTLS
+  handshake. Extra publisher keys only via root-owned
+  `/etc/penguin/trusted-publishers.d/*.pub`.
 
-**Example:**
-- **flask-backend**: User management, order processing, API
-- **go-backend**: Real-time notifications, high-performance data processing
-- **webui**: Admin dashboard, customer portal
-- **connector**: Third-party integrations (payment processing, shipping, etc.)
+The CLI never links module code: it builds its cobra tree from the daemon's
+`ListCommands` RPC and forwards invocations via `Dispatch`.
 
-### Technology Choices
-[Document specific tech stack decisions and rationale]
+## IPC & local authn
 
-**Example:**
-- **Database**: PostgreSQL (multi-tenant support required)
-- **Cache**: Redis (session storage, real-time data)
-- **Message Queue**: RabbitMQ (async order processing)
-- **Search**: Elasticsearch (full-text search for products)
+gRPC over unix socket `/run/penguin/penguind.sock` (0660 root:penguin) with
+SO_PEERCRED checks; Windows named pipe `\\.\pipe\penguind` with SDDL
+restricting to Administrators/SYSTEM + configured group.
 
-### Data Model Overview
-[Brief overview of core entities and relationships]
+## Security invariants
 
-### Integration Points
-[Document external systems and integrations]
+- Zero secrets in the repo or distributed builds. Tokens/keys live only in the
+  OS secure store (`internal/secrets`, 99designs/keyring; encrypted-file
+  backend for the headless daemon keyed by root-only
+  `/var/lib/penguind/keyring.key`).
+- License/feature flags via `https://license.penguintech.io`
+  (`internal/licensing`): offline cache with grace TTL; unreachable server ⇒
+  cached result; unknown flags default OFF; never crash. Flag keys:
+  `penguin.{module-or-feature}`.
+- Self-update only applies artifacts whose minisign signature verifies against
+  the embedded PenguinTech key.
+- Sanitized logging only (penguin-libs go-common SanitizedLogger) — no tokens,
+  PII, or full emails.
+- Resolver/tunnel changes must restore on module Stop AND daemon shutdown; a
+  crash-recovery marker restores on next start.
 
-**Example:**
-- Stripe for payment processing
-- SendGrid for email notifications
-- AWS S3 for file storage
-- Twilio for SMS notifications
+## Dependency risk register
 
-## Application-Specific Requirements
+| # | Risk | Mitigation in place |
+|---|---|---|
+| R1 | penguin-libs Go modules lack `packages/go-X/vX.Y.Z` tags | Pinned by commit pseudo-version (`v0.0.0-20260521191846-f8a443a6f88c`, origin/main). Upstream: add subdir tags. |
+| R2 | go-aaa's `replace ../go-common` not inherited by consumers | Consumer-side `replace` in our go.mod pins go-common to the same commit. Remove once upstream tags exist. |
+| R3 | squawk-client-go is an untagged subdirectory module | Pin pseudo-version at reviewed commit; upstream: tag `squawk-client-go/vX.Y.Z`. |
+| R4 | No Go system-DNS set/restore exists | New `internal/modules/squawk/sysresolver*.go` (per-OS). |
+| R5 | tobogganing native client code is `internal/` | Ported into `internal/modules/tobogganing` (GUI dropped). |
+| R6 | Tray needs cgo on macOS | Tray isolated in `penguin-tray` binary. |
+| R7 | Secret Service unavailable to headless root daemon | keyring encrypted-file backend fallback (root-only key file). |
+| R8 | quic-go version skew (squawk vs go-h3) | MVS picks max; verified at module-import time. |
+| R9 | "WireGuard" trademark | Docs say "WireGuard-compatible"; embedded wireguard-go is MIT. |
+| R10 | Windows pipe auth | go-winio SDDL `D:P(A;;GA;;;BA)(A;;GA;;;SY)`. |
 
-### Feature Requirements
-[Document critical features specific to this application]
+## Upstream work queued (do not push without approval)
 
-### Performance Requirements
-[Document specific performance SLAs]
+- penguin-libs: tag `packages/go-common`, `go-h3`, `go-aaa`; fix go-aaa require
+  on go-common to a real version.
+- squawk: tag `squawk-client-go/vX.Y.Z`.
 
-**Example:**
-- API response time: <100ms p95
-- Search indexing: Near real-time (<1s latency)
-- Concurrent users supported: 10,000+
-- Database transactions: 500+ TPS
+## Coverage policy (two gates)
 
-### Scalability Requirements
-[Document expected growth and scaling needs]
+The house 90% bar applies to hand-written logic. Two gates enforce it:
 
-### Security & Compliance
-[Document app-specific security requirements]
+**Enforced coverage gate = the unit gate at 90%.** `make test` runs it everywhere
+(dev + CI, unprivileged) and fails below 90. It measures hand-written logic,
+excluding from the denominator:
 
-**Example:**
-- PCI DSS compliance (payment handling)
-- GDPR compliance (user data)
-- SOC2 Type II certification needed
-- Data encryption at rest and in transit
+- generated `*.pb.go`
+- `cmd/` main wiring + `examples/` (exercised by `make smoke-test` + E2E)
+- zero-logic OS/framework adapters isolated into their own files: `plugin_glue.go`
+  (go-plugin boilerplate), `vpn_wgctrl.go` (kernel WireGuard adapter),
+  `sysresolver_resolvectl_linux.go` (resolvectl exec)
+- the subprocess/socket **orchestration** only reachable with a real peer/child:
+  `internal/ipc` transport, `internal/extplugin/client.go`
 
-## Domain-Specific Standards
+**Integration tier = functional validation of that boundary, not a second hard
+gate.** `//go:build integration` files compile *in addition to* the unit tests, so
+`make test-integration` (privileged CI, `integration.yml`) runs the real
+subprocess plugin lifecycle, the `SO_PEERCRED` socket handshake, the host-service
+callbacks, the system resolver, and a WireGuard device against genuine kernels and
+processes. `make test-integration-cover` prints the combined boundary-inclusive
+coverage (≈90%) as an **informational** report — it is not a blocking gate,
+because part of the boundary (the go-plugin process entrypoint, kernel wgctrl
+adapters) is structurally uncoverable and root-gated tests self-skip
+(`os.Geteuid() != 0`) off the privileged runner.
 
-### Business Logic Patterns
-[Document patterns specific to your domain]
+When adding code: put logic under the unit gate. If something is a genuine
+OS/subprocess boundary, isolate it into a dedicated adapter file (excluded, like
+generated code) and add a `//go:build integration` test that exercises it for
+real — do not hide untested logic behind the exclusion.
 
-### API Endpoints Overview
-[High-level grouping of API endpoints by domain]
+## Adding a new product module (checklist)
 
-**Example:**
-```
-/api/v1/auth/*        - Authentication endpoints
-/api/v1/users/*       - User management
-/api/v1/products/*    - Product catalog
-/api/v1/orders/*      - Order management
-/api/v1/payments/*    - Payment processing
-/api/v1/reports/*     - Analytics and reporting
-```
-
-### Database Schema Overview
-[Link to or document key tables and their relationships]
-
-### Custom Roles & Permissions
-[Document application-specific roles beyond the standard Admin/Maintainer/Viewer]
-
-**Example:**
-- **Product Manager**: Can manage products, pricing, but not process refunds
-- **Support Agent**: Can view orders and respond to tickets, but not process payments
-- **Finance Admin**: Can view financial reports but not access customer data
-- **Warehouse Manager**: Can manage inventory but not access pricing
-
-## Development Setup
-
-### Prerequisites
-[App-specific setup beyond template requirements]
-
-**Example:**
-- Stripe test API keys configured
-- SendGrid account and API key
-- AWS S3 bucket created
-- Elasticsearch cluster running
-
-### Local Development Environment
-[Any additional setup or configuration beyond docs/DEVELOPMENT.md]
-
-### Mock Data
-[App-specific mock data seeding beyond standard template patterns]
-
-**Example:**
-- 5-10 sample products with variants
-- 3-5 test users with different roles
-- Sample orders in various states (pending, shipped, delivered, refunded)
-
-## Testing Standards
-
-### Critical User Flows to Test
-[App-specific workflows that must be tested]
-
-**Example:**
-- User registration and email confirmation
-- Product search and filter
-- Add to cart, checkout, payment processing
-- Order tracking and delivery status
-
-### Performance Test Scenarios
-[Specific load testing requirements]
-
-**Example:**
-- 1,000 concurrent product searches
-- 100 concurrent order placements
-- Search indexing of 100,000 products
-
-## Deployment & Operations
-
-### Environment-Specific Configuration
-[App-specific environment variables and settings]
-
-### Monitoring & Alerting
-[App-specific metrics and alerts]
-
-**Example:**
-- Alert if payment processing fails (critical)
-- Alert if search index is stale >5 minutes
-- Track order fulfillment time distribution
-
-### Backup & Recovery
-[App-specific backup strategy]
-
-**Example:**
-- Daily database backups to S3
-- Transaction logs for point-in-time recovery
-- 30-day retention policy
-
-## Known Limitations & Constraints
-
-[Document any known issues, limitations, or architectural constraints specific to this application]
-
-**Example:**
-- Single payment gateway (Stripe only) - no multi-gateway support
-- Customer data limited to 10MB per user
-- Search index refreshes every 1 minute (near real-time)
-
-## Common Tasks & Runbooks
-
-### [Task Name]
-[Step-by-step instructions for common operational tasks]
-
-**Example:** Handling Refunds
-1. Customer initiates refund through dashboard
-2. Support team verifies order in admin panel
-3. Click "Process Refund" button
-4. Stripe processes refund (5-10 business days)
-5. Customer receives notification
-
-## Future Roadmap
-
-[Document planned features or architectural changes]
-
----
-
-**Last Updated**: [Date]
-**Maintained By**: [Team/Person]
-**Related Documentation**: CLAUDE.md, docs/STANDARDS.md, docs/DEVELOPMENT.md, docs/TESTING.md
+1. `internal/modules/<name>/module.go` implementing `sdk.Module`.
+2. Register: one factory line in `internal/registry/registry.go`.
+3. Config schema + `/etc/penguin/modules.d/<name>.yaml` example.
+4. Run the SDK conformance suite: `sdktest.TestModule(t, <name>.New)`.
+5. Feature flag `penguin.<name>` (default OFF) + license gating if enterprise.
+6. Tray-worthy commands flagged `Tray: true` in `Commands()`.
