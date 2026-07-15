@@ -18,7 +18,7 @@ require (
 	github.com/kardianos/service v1.2.2
 	github.com/minio/selfupdate v0.6.0
 	github.com/penguintechinc/squawk/squawk-client-go v0.0.0-20260710184153-35ceb9b18f74
-	github.com/prometheus/client_golang v1.22.0
+	github.com/prometheus/client_golang v1.23.2
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.9
@@ -58,9 +58,9 @@ require (
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/oklog/run v1.1.0 // indirect
 	github.com/pelletier/go-toml/v2 v2.2.3 // indirect
-	github.com/prometheus/client_model v0.6.1 // indirect
-	github.com/prometheus/common v0.62.0 // indirect
-	github.com/prometheus/procfs v0.15.1 // indirect
+	github.com/prometheus/client_model v0.6.2 // indirect
+	github.com/prometheus/common v0.66.1 // indirect
+	github.com/prometheus/procfs v0.16.1 // indirect
 	github.com/sagikazarmark/locafero v0.7.0 // indirect
 	github.com/sourcegraph/conc v0.3.0 // indirect
 	github.com/spf13/afero v1.12.0 // indirect
@@ -68,6 +68,7 @@ require (
 	github.com/spf13/viper v1.20.1 // indirect
 	github.com/subosito/gotenv v1.6.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
+	go.yaml.in/yaml/v2 v2.4.2 // indirect
 	golang.org/x/crypto v0.48.0 // indirect
 	golang.org/x/mod v0.32.0 // indirect
 	golang.org/x/net v0.51.0 // indirect
