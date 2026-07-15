@@ -10,3 +10,13 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+# Wire types the conversions target. sdk owns the hand-written glue between the
+# ergonomic Rust types here and the generated proto structs.
+penguin-proto.workspace = true
+# Dyn-dispatched async trait methods (Module/SecretStore) — the daemon holds
+# `dyn Module` and cannot tell built-in from external plugins apart.
+async-trait.workspace = true
+thiserror.workspace = true
+# Mirrors the Go sdk depending on prometheus: the metrics handle a module
+# registers collectors through.
+prometheus.workspace = true

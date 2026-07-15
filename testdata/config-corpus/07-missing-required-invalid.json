@@ -1,0 +1,11 @@
+{
+  "description": "required field absent",
+  "valid": false,
+  "schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": { "endpoint": { "type": "string" } },
+    "required": ["endpoint"]
+  },
+  "instanceYaml": "port: 53\n"
+}

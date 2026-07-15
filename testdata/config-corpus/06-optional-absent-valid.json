@@ -1,0 +1,14 @@
+{
+  "description": "optional field may be omitted",
+  "valid": true,
+  "schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+      "endpoint": { "type": "string" },
+      "retries": { "type": "integer", "minimum": 0 }
+    },
+    "required": ["endpoint"]
+  },
+  "instanceYaml": "endpoint: us-east\n"
+}

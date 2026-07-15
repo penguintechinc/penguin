@@ -6,7 +6,17 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
+# This crate is entirely generated code and is excluded from the coverage gate
+# (see the Makefile / llvm-cov ignore regexes). It carries no hand-written
+# logic, only the tonic/prost output for the daemon.v1 and sdk.v1 contracts.
+
 [lints]
 workspace = true
 
 [dependencies]
+tonic.workspace = true
+tonic-prost.workspace = true
+prost.workspace = true
+
+[build-dependencies]
+tonic-prost-build.workspace = true

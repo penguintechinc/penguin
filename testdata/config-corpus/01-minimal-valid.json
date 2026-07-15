@@ -1,0 +1,11 @@
+{
+  "description": "required string field present",
+  "valid": true,
+  "schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": { "endpoint": { "type": "string" } },
+    "required": ["endpoint"]
+  },
+  "instanceYaml": "endpoint: us-east\n"
+}
