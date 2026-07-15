@@ -64,7 +64,8 @@ func Listen(cfg ListenerConfig) (net.Listener, grpc.ServerOption, error) {
 	// 0660 is deliberate: the socket is the daemon's authorization boundary
 	// (root + members of AllowedGroup). Peer identity is re-checked per RPC
 	// via SO_PEERCRED in checkPeerAuth.
-	if err := os.Chmod(cfg.Path, 0o660); err != nil { // #nosec G302 -- group access is the documented design
+	err = os.Chmod(cfg.Path, 0o660) // #nosec G302 -- group access (root + AllowedGroup) is the documented design
+	if err != nil {
 		_ = listener.Close()
 		return nil, nil, fmt.Errorf("chmod socket: %w", err)
 	}

@@ -51,7 +51,8 @@ func NewVerifier() *Verifier {
 				continue
 			}
 			keyPath := filepath.Join(trustDir, entry.Name())
-			if keyData, err := os.ReadFile(keyPath); err == nil { // #nosec G304 -- reading trusted keys from system directory with filtered filename
+			keyData, err := os.ReadFile(keyPath) // #nosec G304 -- trusted keys from a filtered filename under the root-owned system trust dir
+			if err == nil {
 				v.trustedPublicKeys = append(v.trustedPublicKeys, string(keyData))
 			}
 		}
@@ -122,7 +123,8 @@ func (v *Verifier) verifyDirOwnership(dir string) error {
 	daemonUID := os.Getuid()
 	if stat, ok := info.Sys().(interface{ Uid() uint32 }); ok {
 		uid := stat.Uid()
-		if uid != 0 && uid != uint32(daemonUID) { // #nosec G115 -- os.Getuid() returns non-negative int, safe to cast to uint32
+		wantUID := uint32(daemonUID) // #nosec G115 -- os.Getuid() returns a non-negative int, safe to cast to uint32
+		if uid != 0 && uid != wantUID {
 			return fmt.Errorf("plugin dir not owned by root or daemon (uid %d != 0 and %d)", uid, daemonUID)
 		}
 	}
@@ -147,7 +149,8 @@ func (v *Verifier) verifyFileOwnership(path string) error {
 	daemonUID := os.Getuid()
 	if stat, ok := info.Sys().(interface{ Uid() uint32 }); ok {
 		uid := stat.Uid()
-		if uid != 0 && uid != uint32(daemonUID) { // #nosec G115 -- os.Getuid() returns non-negative int, safe to cast to uint32
+		wantUID := uint32(daemonUID) // #nosec G115 -- os.Getuid() returns a non-negative int, safe to cast to uint32
+		if uid != 0 && uid != wantUID {
 			return fmt.Errorf("plugin file not owned by root or daemon (uid %d != 0 and %d)", uid, daemonUID)
 		}
 	}
