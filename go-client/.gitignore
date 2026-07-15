@@ -1,0 +1,17 @@
+# Go build artifacts for the frozen client (paths relative to go-client/).
+/bin/
+/penguind
+/penguin
+/penguin-tray
+/pcli
+/plugin-hello
+*.exe
+*.msi
+*.test
+
+# Coverage profiles
+coverage.out
+coverage.unit.out
+coverage.int.out
+coverage.filtered.out
+coverage.intfiltered.out

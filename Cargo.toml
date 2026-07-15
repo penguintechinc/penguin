@@ -1,0 +1,35 @@
+# Penguin endpoint agent — Rust workspace root.
+#
+# The complete Go implementation is frozen under `go-client/` as its own Go
+# module (NOT a Cargo member) and serves as the feature-parity conformance
+# oracle. Every crate here is being ported to reach parity with it. See
+# ~/.claude/plans/create-a-plan-to-goofy-hopcroft.md for the full migration plan.
+#
+# House style (learning-oriented): keep turbofish and match-arms/closures to a
+# minimum, prefer explicit types + named helpers + if-let, and document every
+# module/type/fn with a `///` (what + why) comment.
+
+[workspace]
+resolver = "3"
+members = ["crates/*", "bins/*", "examples/plugin-hello-rs"]
+
+[workspace.package]
+version = "0.2.0"
+edition = "2024"
+rust-version = "1.97"
+license = "LicenseRef-PenguinTech"
+repository = "https://github.com/penguintechinc/penguin"
+
+# Shared dependency versions are pinned here as crates are introduced per
+# milestone (M1+). Risk-bearing crates use an exact `=x.y.z`; the rest use a
+# semver-compatible range. Left minimal in M0 so the empty scaffold builds.
+[workspace.dependencies]
+
+# Deny unsafe workspace-wide; the few legitimate sites (Windows SDDL / named-pipe
+# glue in penguin-ipc) opt back in per-file with an allow + justification.
+[workspace.lints.rust]
+unsafe_code = "deny"
+
+[workspace.lints.clippy]
+# Nudge toward the readable, learning-oriented style described above.
+all = { level = "warn", priority = -1 }

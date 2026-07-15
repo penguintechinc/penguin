@@ -1,0 +1,30 @@
+# The canonical .proto sources live in proto/. The frozen go-client keeps its own
+# embedded copies (never regenerated). This job fails if the two diverge, so no
+# one edits one side without the other. Actions pinned to commit SHAs.
+name: proto-drift
+
+on:
+  pull_request:
+    paths:
+      - "proto/**"
+      - "go-client/**/*.proto"
+      - ".github/workflows/proto-drift.yml"
+  push:
+    branches: [main, "release/**"]
+
+permissions:
+  contents: read
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: canonical proto/ must match the frozen go-client copies
+        run: |
+          set -e
+          diff -u go-client/api/proto/penguin/daemon/v1/daemon.proto \
+                  proto/penguin/daemon/v1/daemon.proto
+          diff -u go-client/pkg/sdk/proto/penguin/sdk/v1/module.proto \
+                  proto/penguin/sdk/v1/module.proto
+          echo "proto-drift OK: canonical proto/ is identical to go-client copies"

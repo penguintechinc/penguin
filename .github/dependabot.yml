@@ -1,10 +1,15 @@
-# Dependabot version updates for the Penguin endpoint agent.
-# https://docs.github.com/code-security/dependabot/dependabot-version-updates
+# Dependabot for the penguin repo: the Rust workspace (root), the frozen Go
+# client (go-client/), and pinned GitHub Actions.
 version: 2
 updates:
-  # Go module dependencies.
-  - package-ecosystem: "gomod"
+  # Rust workspace dependencies.
+  - package-ecosystem: "cargo"
     directory: "/"
+    schedule:
+      interval: "weekly"
+  # Frozen Go client module.
+  - package-ecosystem: "gomod"
+    directory: "/go-client"
     schedule:
       interval: "weekly"
   # Keep pinned GitHub Actions commit SHAs current.
