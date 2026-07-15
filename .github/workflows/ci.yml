@@ -68,3 +68,22 @@ jobs:
         run: go build ./cmd/penguind ./cmd/penguin ./internal/... ./pkg/...
       - name: Smoke test
         run: make smoke-test
+
+  # Supply-chain scan carried forward from main's template CI (filesystem vuln +
+  # misconfig + secret). Report-only, matching main's non-blocking behavior; the
+  # pre-push hook gates trivy locally, and govulncheck above gates Go vulns.
+  # Runs on the bare runner (not the golang container) so trivy-action can
+  # install the scanner. Action pinned to the v0.35.0 commit SHA.
+  trivy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Trivy filesystem scan
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,misconfig,secret
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: '0'
