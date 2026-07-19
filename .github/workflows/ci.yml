@@ -19,8 +19,11 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - name: protoc
         # tonic-prost-build (penguin-proto) shells out to protoc at build time;
-        # the base rust image does not ship it.
-        run: apt-get update && apt-get install -y --no-install-recommends protobuf-compiler
+        # the base rust image ships neither it nor the well-known types.
+        # libprotobuf-dev provides google/protobuf/*.proto, which the vendored
+        # go-plugin grpc_stdio.proto imports — protobuf-compiler alone is not
+        # enough and fails with a confusing "File not found" on that import.
+        run: apt-get update && apt-get install -y --no-install-recommends protobuf-compiler libprotobuf-dev
       - name: components
         run: rustup component add rustfmt clippy
       - name: fmt

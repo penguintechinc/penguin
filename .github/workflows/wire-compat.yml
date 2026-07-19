@@ -1,0 +1,83 @@
+# Wire-compat gate #1: the frozen Go CLI must drive the Rust daemon.
+#
+# This is the payoff for freezing the Go tree at go-client/. The Go `penguin`
+# CLI is an independent implementation of the daemon.v1 client contract, so it
+# catches any wire drift in the Rust daemon — field numbers, api_version
+# handling, gRPC status codes, streaming shape — that our own tests, sharing our
+# own types, structurally cannot.
+#
+# Runs on the plain runner rather than a container so both toolchains are
+# available: GOTOOLCHAIN=auto fetches the Go version go-client/go.mod asks for,
+# and rustup honours rust-toolchain.toml. Actions pinned to commit SHAs.
+name: wire-compat
+
+on:
+  pull_request:
+    paths:
+      - "crates/**"
+      - "bins/**"
+      - "proto/**"
+      - "go-client/**"
+      - "scripts/wire-compat/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/wire-compat.yml"
+  push:
+    branches: [main, "release/**"]
+
+permissions:
+  contents: read
+
+jobs:
+  go-cli-drives-rust-daemon:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: protoc
+        # libprotobuf-dev supplies the well-known types (google/protobuf/
+        # empty.proto) imported by the vendored go-plugin grpc_stdio.proto;
+        # protobuf-compiler on its own fails that import.
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends protobuf-compiler libprotobuf-dev
+
+      - name: Build the frozen Go CLI
+        working-directory: go-client
+        env:
+          GOTOOLCHAIN: auto
+          GOFLAGS: -buildvcs=false
+        run: go build -o bin/penguin ./cmd/penguin
+
+      - name: Build the Rust daemon
+        run: cargo build -p penguind --locked
+
+      - name: Go CLI drives Rust penguind
+        env:
+          PENGUIND: target/debug/penguind
+          PENGUIN_GO: go-client/bin/penguin
+        run: scripts/wire-compat/run.sh
+
+  rust-host-loads-go-plugin:
+    # The other half of the compat story: our reimplementation of the go-plugin
+    # HOST must launch and drive a real, unmodified Go-built plugin binary,
+    # including the AutoMTLS handshake against its ECDSA P-521 certificate.
+    # Unit tests structurally cannot cover this — every bug found here (missing
+    # ALPN, streams that withhold headers) only appears against a real plugin.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: protoc
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends protobuf-compiler libprotobuf-dev
+
+      - name: Build the real Go plugin
+        working-directory: go-client
+        env:
+          GOTOOLCHAIN: auto
+          GOFLAGS: -buildvcs=false
+        run: go build -o bin/plugin-hello ./examples/plugin-hello
+
+      - name: Rust host loads it
+        env:
+          PENGUIN_INTEGRATION: "1"
+          PENGUIN_PLUGIN_HELLO: go-client/bin/plugin-hello
+        run: cargo test -p penguin-goplugin-host --test goplugin_compat --locked -- --ignored --nocapture

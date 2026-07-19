@@ -25,3 +25,12 @@ pub mod sdk {
         tonic::include_proto!("penguin.sdk.v1");
     }
 }
+
+/// The vendored hashicorp/go-plugin v1.7.0 protocol (proto package `plugin`).
+///
+/// Broker, controller, and stdio — the three services the Rust host must speak
+/// to load an existing Go-built plugin binary unchanged. See
+/// `proto/goplugin/README.md` for provenance and licensing.
+pub mod goplugin {
+    tonic::include_proto!("plugin");
+}

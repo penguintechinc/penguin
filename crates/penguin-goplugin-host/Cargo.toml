@@ -10,3 +10,32 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+# The generated go-plugin protocol (broker/controller/stdio) plus sdk.v1.
+penguin-proto.workspace = true
+# The Module trait this crate adapts a remote plugin into.
+penguin-sdk.workspace = true
+
+tokio.workspace = true
+tokio-stream.workspace = true
+tokio-util.workspace = true
+tonic.workspace = true
+tonic-health.workspace = true
+async-trait.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+
+# AutoMTLS. aws-lc-rs is mandatory: plugins present ECDSA P-521 certificates and
+# rustls' default ring provider cannot verify secp521r1.
+rustls.workspace = true
+tokio-rustls.workspace = true
+rcgen.workspace = true
+# The handshake line carries the plugin's leaf certificate as base64 DER using
+# the RawStdEncoding variant — standard alphabet, NO padding.
+base64.workspace = true
+# Bridges tokio's AsyncRead/AsyncWrite to hyper's Read/Write traits for the
+# custom TLS-over-unix-socket connector tonic's Endpoint::connect_with_connector
+# requires. See the workspace Cargo.toml for why this is necessary.
+hyper-util.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

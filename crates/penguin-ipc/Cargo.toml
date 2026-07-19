@@ -10,3 +10,28 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+tonic.workspace = true
+tokio.workspace = true
+tokio-stream.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+
+# Unix peer-credential authorization needs NSS-aware group resolution.
+[target.'cfg(unix)'.dependencies]
+nix.workspace = true
+
+# The named-pipe listener builds a SECURITY_ATTRIBUTES from the SDDL string,
+# which is what go-winio does internally.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+] }
+# The named-pipe client connector must hand tonic a hyper-compatible IO handle;
+# TokioIo is the adapter that satisfies that bound. Unix needs none of this —
+# tonic 0.14 speaks `unix://` URIs natively.
+hyper-util = { version = "0.1", features = ["tokio"] }
+
+[dev-dependencies]
+tempfile = "3"

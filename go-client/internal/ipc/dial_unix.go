@@ -19,6 +19,14 @@ func Dial(ctx context.Context, path string) (*grpc.ClientConn, error) {
 	var d net.Dialer
 	return grpc.NewClient("passthrough:///"+path,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		// WithAuthority is required, not cosmetic. Without it grpc-go derives the
+		// HTTP/2 :authority pseudo-header from the passthrough target, i.e. the
+		// URL-escaped socket path ("%2Frun%2Fpenguin%2Fpenguind.sock"). That is
+		// not a valid RFC 3986 authority, and a spec-strict HTTP/2 server rejects
+		// the stream with PROTOCOL_ERROR before the request reaches any handler.
+		// It went unnoticed because grpc-go's own server accepts it — the bug is
+		// only visible against a different implementation.
+		grpc.WithAuthority("localhost"),
 		grpc.WithContextDialer(func(dialCtx context.Context, addr string) (net.Conn, error) {
 			return d.DialContext(dialCtx, "unix", addr)
 		}),

@@ -1,0 +1,47 @@
+# Integration tier: tests marked `#[ignore]` and gated on PENGUIN_INTEGRATION=1.
+#
+# These exercise real boundaries the unit gate deliberately excludes — unix
+# sockets and the SO_PEERCRED matrix (M2), external plugin subprocesses (M3),
+# privileged :53/:123 binds and resolver surgery (M5), and network namespaces
+# for WireGuard (M6). The container is privileged for exactly that reason.
+#
+# Unlike the unit gate this tier is functional validation, not a second coverage
+# gate; combined coverage is reported informationally by `make
+# test-integration-cover`. Actions pinned to commit SHAs.
+name: integration
+
+on:
+  pull_request:
+    paths:
+      - "crates/**"
+      - "bins/**"
+      - "proto/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "Makefile"
+      - ".github/workflows/integration.yml"
+  push:
+    branches: [main, "release/**"]
+
+permissions:
+  contents: read
+
+jobs:
+  integration:
+    runs-on: ubuntu-latest
+    container:
+      image: rust:1.97-bookworm
+      # Privileged: root-only tests self-skip when unprivileged, so without this
+      # the tier would silently pass by skipping everything that matters.
+      options: --privileged
+    env:
+      PENGUIN_INTEGRATION: "1"
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: protoc
+        # protobuf-compiler alone is not enough: libprotobuf-dev supplies the
+        # well-known types (google/protobuf/empty.proto) that the vendored
+        # go-plugin grpc_stdio.proto imports.
+        run: apt-get update && apt-get install -y --no-install-recommends protobuf-compiler libprotobuf-dev
+      - name: integration tests
+        run: cargo test --workspace --locked -- --ignored

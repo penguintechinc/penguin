@@ -34,7 +34,10 @@ func TestPluginLifecycleIntegration(t *testing.T) {
 
 	pluginExePath := filepath.Join(binDir, "plugin-hello")
 	buildCmd := exec.Command("go", "build", "-o", pluginExePath, "./examples/plugin-hello") //nolint:gosec // hardcoded command, only output is variable
-	buildCmd.Dir = "/home/penguin/code/penguin"
+	// repoRoot walks up to the go.mod, which is the go-client module root since
+	// the M0 restructure moved the Go tree under go-client/. A hardcoded absolute
+	// path here broke every containerised run (and any other checkout location).
+	buildCmd.Dir = repoRoot(t)
 	if output, err := buildCmd.CombinedOutput(); err != nil {
 		t.Fatalf("build plugin failed: %v\n%s", err, output)
 	}
@@ -274,7 +277,10 @@ func TestDiscoverMixedPlugins(t *testing.T) {
 
 	exePath := filepath.Join(exeDir, "plugin-hello")
 	buildCmd := exec.Command("go", "build", "-o", exePath, "./examples/plugin-hello") //nolint:gosec // hardcoded command, only output is variable
-	buildCmd.Dir = "/home/penguin/code/penguin"
+	// repoRoot walks up to the go.mod, which is the go-client module root since
+	// the M0 restructure moved the Go tree under go-client/. A hardcoded absolute
+	// path here broke every containerised run (and any other checkout location).
+	buildCmd.Dir = repoRoot(t)
 	if output, err := buildCmd.CombinedOutput(); err != nil {
 		t.Fatalf("build plugin failed: %v\n%s", err, output)
 	}
@@ -420,7 +426,10 @@ func TestLoadFallbackToLoadWithVerifier(t *testing.T) {
 
 	pluginExePath := filepath.Join(binDir, "plugin-hello")
 	buildCmd := exec.Command("go", "build", "-o", pluginExePath, "./examples/plugin-hello") //nolint:gosec // hardcoded command, only output is variable
-	buildCmd.Dir = "/home/penguin/code/penguin"
+	// repoRoot walks up to the go.mod, which is the go-client module root since
+	// the M0 restructure moved the Go tree under go-client/. A hardcoded absolute
+	// path here broke every containerised run (and any other checkout location).
+	buildCmd.Dir = repoRoot(t)
 	if output, err := buildCmd.CombinedOutput(); err != nil {
 		t.Fatalf("build plugin failed: %v\n%s", err, output)
 	}

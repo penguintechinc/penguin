@@ -10,3 +10,31 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+# The daemon library holds all the logic; this binary only wires it to a
+# transport, a config directory, and the process lifecycle. penguin-ipc lives
+# here rather than in the library so the library stays testable without sockets.
+penguin-daemon.workspace = true
+penguin-ipc.workspace = true
+penguin-telemetry.workspace = true
+penguin-sdk.workspace = true
+penguin-proto.workspace = true
+
+tokio.workspace = true
+tokio-stream.workspace = true
+tokio-util.workspace = true
+tonic.workspace = true
+tonic-health.workspace = true
+tracing.workspace = true
+clap.workspace = true
+
+# Combined JSON stdout + LogRing tracing subscriber (see src/logging.rs) —
+# not a dependency of penguin-daemon itself, only of this binary's wiring.
+tracing-subscriber.workspace = true
+# Startup error enum (DaemonBinError).
+thiserror.workspace = true
+# Implements the async SecretStore trait for the temporary M2 in-memory
+# stand-in (see src/stubs.rs).
+async-trait.workspace = true
+# Resolves the daemon's own uid for PeerAuthInterceptor; already pulled in
+# transitively via penguin-ipc, so this adds no new dependency to the graph.
+nix.workspace = true

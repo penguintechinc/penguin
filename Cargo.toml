@@ -30,6 +30,14 @@ repository = "https://github.com/penguintechinc/penguin"
 # dependents can write `penguin-sdk.workspace = true`.
 penguin-proto = { path = "crates/penguin-proto" }
 penguin-sdk = { path = "crates/penguin-sdk" }
+penguin-telemetry = { path = "crates/penguin-telemetry" }
+penguin-ipc = { path = "crates/penguin-ipc" }
+penguin-daemon = { path = "crates/penguin-daemon" }
+# The external-plugin path: verification pipeline + the go-plugin host that
+# launches a verified binary. The daemon depends on both so LoadModule can
+# resolve a builtin OR an external module through one code path.
+penguin-extplugin = { path = "crates/penguin-extplugin" }
+penguin-goplugin-host = { path = "crates/penguin-goplugin-host" }
 
 # gRPC / protobuf. Wire-compatibility with the Go daemon and go-plugin is the
 # whole point of the rewrite, so these are pinned exactly.
@@ -41,6 +49,81 @@ tonic-prost-build = "=0.14.6"
 # Contract plumbing.
 async-trait = "0.1"
 thiserror = "2"
+
+# Async runtime + transport plumbing for the daemon and its IPC listener.
+tokio = { version = "1", features = [
+    "rt-multi-thread",
+    "macros",
+    "net",
+    "fs",
+    "sync",
+    "time",
+    "io-util",
+    "signal",
+    # Spawning and managing plugin subprocesses (penguin-goplugin-host) needs
+    # tokio's process module; nothing else currently requires disabling it.
+    "process",
+] }
+tokio-stream = { version = "0.1", features = ["net"] }
+# CancellationToken is the direct analogue of Go's context.WithCancel, used for
+# the supervisor lifetime and per-module cancellation.
+tokio-util = { version = "0.7", features = ["rt"] }
+# gRPC health service the go-plugin host and the daemon both expose.
+tonic-health = "=0.14.6"
+# Restart-backoff jitter. The exact Go formula is ported by hand rather than
+# using a backoff crate, because those use different jitter maths.
+rand = "0.9"
+# Cross-platform single-instance file lock (flock on Unix, LockFileEx on
+# Windows) — one crate instead of two cfg-gated modules.
+fs4 = "0.13"
+
+# CLI parsing. penguind's service subcommands are a fixed set (derive reads
+# best); the `penguin` CLI builds its tree at runtime from the daemon's
+# ListCommands RPC, which needs the builder API.
+clap = { version = "4", features = ["derive"] }
+
+# go-plugin AutoMTLS. Plugins present a self-signed ECDSA **P-521** certificate,
+# and rustls' default `ring` provider cannot verify secp521r1 at all — so
+# default features are off everywhere here and aws-lc-rs is selected explicitly.
+# Getting this wrong does not degrade gracefully: the handshake simply fails
+# against every existing Go-built plugin.
+rustls = { version = "0.23", default-features = false, features = [
+    "aws-lc-rs",
+    "std",
+    "tls12",
+    "logging",
+] }
+tokio-rustls = { version = "0.26", default-features = false, features = [
+    "aws-lc-rs",
+    "tls12",
+] }
+# Our own host certificate is ECDSA P-256, not P-521: Go accepts whatever we put
+# in its trust pool, so there is no reason to demand P-521 keygen from rcgen.
+# The "aws_lc_rs" feature (which implies "crypto") is required, not optional:
+# rcgen's `KeyPair`/`CertificateParams::self_signed` are compiled out entirely
+# without a crypto backend feature, so cert generation is simply unavailable
+# without it. It reuses the exact backend rustls above already requires, so
+# this adds no new crypto implementation to the dependency graph.
+rcgen = { version = "0.14", default-features = false, features = [
+    "pem",
+    "aws_lc_rs",
+] }
+base64 = "0.22"
+# Bridges tokio's AsyncRead/AsyncWrite to hyper's own Read/Write traits.
+# Required for penguin-goplugin-host's custom TLS-over-unix-socket gRPC
+# connector: tonic's `Endpoint::connect_with_connector` requires the hyper
+# traits, which only `hyper` and `hyper-util` provide, and neither is
+# re-exported by tonic. Already resolves to the same version tonic pulls in
+# transitively for its own connectors, so this adds no new dependency
+# version to the graph — only a direct name for one already being built.
+hyper-util = { version = "0.1", default-features = false, features = [
+    "tokio",
+] }
+
+# Unix user/group resolution. getgrouplist(3) is NSS-aware, matching the Go
+# os/user (cgo) behaviour on LDAP/sssd hosts — a plain /etc/group parse would
+# silently diverge there.
+nix = { version = "0.30", features = ["user", "fs"] }
 
 # Metrics. tikv's prometheus crate (not the abandoned one); `process` adds the
 # /proc-based process collector that mirrors the Go process collector. Default

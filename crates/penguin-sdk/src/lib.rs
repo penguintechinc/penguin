@@ -15,6 +15,7 @@ pub mod convert;
 pub mod error;
 pub mod host;
 pub mod module;
+pub mod plugin;
 pub mod status;
 
 pub use command::{CommandResult, CommandSpec, FlagSpec, FlagType};

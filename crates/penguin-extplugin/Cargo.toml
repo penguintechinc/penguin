@@ -10,3 +10,17 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+# Manifest (plugin.json) parsing — same JSON shape as the Go struct tags.
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+# SHA256 integrity check on the plugin binary. Risk-bearing (crypto), pinned
+# exact like the workspace's own tonic/prost pins.
+sha2 = "=0.11.0"
+# Verify-only Minisign signature checking against pinned publisher keys.
+# Signing stays in CI (this crate never needs a private key). Risk-bearing,
+# pinned exact.
+minisign-verify = "=0.2.5"
+
+[dev-dependencies]
+tempfile = "3"
