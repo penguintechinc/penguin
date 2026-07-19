@@ -5,6 +5,13 @@
 //! There is no trust-on-first-use: an unpinned publisher key is always a
 //! hard failure ([`VerifyError::UntrustedSigner`]), never a signal to add
 //! the key to the trusted set.
+//!
+//! No publisher key is embedded in this crate. Trust comes entirely from
+//! `*.pub` files placed under the trusted-publishers directory (or injected
+//! directly via [`Verifier::with_keys`]) — an absent or empty trusted set
+//! means every signature is rejected, never accepted. Baking a PenguinTech
+//! publisher key into the binary in the future must be a deliberate,
+//! reviewed act, not a silent default.
 
 use std::fs;
 use std::io;
@@ -21,16 +28,6 @@ use crate::os_stat::{OsStat, StatSource};
 /// Default directory scanned for additional pinned publisher keys
 /// (`*.pub` files), matching the Go daemon's system trust path.
 pub const DEFAULT_TRUSTED_PUBLISHERS_DIR: &str = "/etc/penguin/trusted-publishers.d";
-
-/// Placeholder embedded PenguinTech publisher key, ported verbatim from the
-/// Go reference's `embeddedPublicKey`.
-///
-/// TODO: replace with the real production signing key before release. This
-/// text decodes to 41 bytes, one short of a valid 42-byte minisign key, so
-/// it can never itself verify a signature — the Go reference carries the
-/// same placeholder with the same defect, and fixing it is out of scope for
-/// this port (a real key rotation, not a parsing change).
-const EMBEDDED_PUBLIC_KEY: &str = "untrusted comment: minisign public key\nRWQf7zLn5+DYjyZ8ZWIrasJVjMKWePWGVgvBvF40FmkT7K7VZV7EVwA=\n";
 
 /// Every distinct way plugin verification can fail, so callers (and tests)
 /// can branch on the reason rather than parse error text.
@@ -107,14 +104,21 @@ pub enum VerifyError {
 /// Verifies a plugin directory against its manifest: directory ownership,
 /// binary ownership, SHA256, then minisign signature — in that order,
 /// stopping at the first failing check.
+///
+/// `Send + Sync` (via [`StatSource`]'s supertrait bound on the boxed field
+/// below), so a `Verifier` can be held as a field or a local across an
+/// `.await` point in an async caller — see `verifier_is_send_and_sync` in
+/// this module's tests for the compile-time assertion.
 pub struct Verifier {
     stat: Box<dyn StatSource>,
     trusted_public_keys: Vec<String>,
 }
 
 impl Verifier {
-    /// Production verifier: the embedded PenguinTech key plus any `*.pub`
-    /// files found under [`DEFAULT_TRUSTED_PUBLISHERS_DIR`].
+    /// Production verifier: trusts only the `*.pub` files found under
+    /// [`DEFAULT_TRUSTED_PUBLISHERS_DIR`] — no publisher key is embedded, so
+    /// an empty or absent directory means this verifier trusts nothing and
+    /// [`Verifier::verify`] fails closed on every signature.
     pub fn new() -> Self {
         Self::with_trusted_dir(Path::new(DEFAULT_TRUSTED_PUBLISHERS_DIR))
     }
@@ -123,17 +127,14 @@ impl Verifier {
     /// publisher keys instead of the hardcoded system path — lets tests
     /// point at a tempdir instead of touching `/etc`.
     pub fn with_trusted_dir(trusted_dir: &Path) -> Self {
-        let mut keys = vec![EMBEDDED_PUBLIC_KEY.to_string()];
-        keys.extend(load_trusted_keys(trusted_dir));
         Verifier {
             stat: Box::new(OsStat),
-            trusted_public_keys: keys,
+            trusted_public_keys: load_trusted_keys(trusted_dir),
         }
     }
 
-    /// Test-only verifier: exactly the given trusted keys, no embedded key,
-    /// no directory scan. Mirrors the Go reference's `NewVerifierWithKeys`
-    /// test helper.
+    /// Test-only verifier: exactly the given trusted keys, nothing implicit.
+    /// Mirrors the Go reference's `NewVerifierWithKeys` test helper.
     pub fn with_keys(trusted_public_keys: Vec<String>) -> Self {
         Verifier {
             stat: Box::new(OsStat),
@@ -260,7 +261,7 @@ impl Verifier {
 
         for key_text in &self.trusted_public_keys {
             let Ok(public_key) = PublicKey::decode(key_text) else {
-                // Malformed trusted key (e.g. the placeholder embedded key)
+                // Malformed trusted key (e.g. corrupt *.pub file contents)
                 // — skip it and keep trying the rest, same as the Go
                 // reference's UnmarshalText-fails-continue loop.
                 continue;
@@ -395,6 +396,17 @@ mod tests {
     fn owner_uid_of(path: &Path) -> u32 {
         use std::os::unix::fs::MetadataExt;
         std::fs::metadata(path).expect("stat for uid").uid()
+    }
+
+    /// Compile-time assertion, not a runtime check: this only needs to type
+    /// check, never to execute meaningfully. If `Verifier` ever regains a
+    /// field that isn't `Send + Sync` (e.g. a `StatSource` bound gets
+    /// loosened again), this function fails to compile — a future change
+    /// cannot silently reintroduce the bug FIX 2 removed.
+    #[test]
+    fn verifier_is_send_and_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<Verifier>();
     }
 
     #[test]
@@ -704,15 +716,53 @@ mod tests {
                 .trusted_public_keys
                 .contains(&FIXTURE_PUBLIC_KEY.to_string())
         );
-        // Only the embedded placeholder key plus the one *.pub file — the
-        // non-.pub file must not have been picked up.
-        assert_eq!(verifier.trusted_public_keys.len(), 2);
+        // Only the one *.pub file — no embedded key, and the non-.pub file
+        // must not have been picked up.
+        assert_eq!(verifier.trusted_public_keys.len(), 1);
     }
 
     #[test]
-    fn default_verifier_matches_new() {
-        let verifier = Verifier::default();
-        assert!(!verifier.trusted_public_keys.is_empty());
+    fn with_trusted_dir_and_no_pub_files_has_no_trusted_keys() {
+        // No embedded fallback key: a trusted directory with nothing in it
+        // (or that doesn't exist at all) leaves the verifier trusting
+        // nothing, exactly like `load_trusted_keys_from_missing_directory`.
+        let tmp = tempfile::tempdir().expect("tempdir");
+
+        let verifier = Verifier::with_trusted_dir(tmp.path());
+
+        assert!(verifier.trusted_public_keys.is_empty());
+    }
+
+    #[test]
+    fn default_verifier_constructs_without_panicking() {
+        // Not asserting on `trusted_public_keys` here: whether
+        // `DEFAULT_TRUSTED_PUBLISHERS_DIR` has any `*.pub` files is real
+        // ambient filesystem state this crate does not control. The
+        // property that must hold regardless of that state —
+        // "no trusted keys means every signature is refused" — is asserted
+        // hermetically by
+        // `verifier_with_no_trusted_keys_refuses_a_validly_signed_binary`.
+        let _verifier = Verifier::default();
+    }
+
+    #[test]
+    fn verifier_with_no_trusted_keys_refuses_a_validly_signed_binary() {
+        // This is the safety property FIX 1 exists to guarantee: with no
+        // embedded key and an empty trusted-publishers directory,
+        // `Verifier::new`'s equivalent configuration must still refuse a
+        // binary that is genuinely, correctly signed — never fall back to
+        // accepting it.
+        let (tmp, manifest) = signed_plugin_dir();
+        let plugin_dir = tmp.path().join("test-plugin");
+        let empty_trusted_dir = tempfile::tempdir().expect("empty trusted dir");
+        let verifier = Verifier::with_trusted_dir(empty_trusted_dir.path());
+
+        let expected_uid = owner_uid_of(&plugin_dir);
+        let err = verifier
+            .verify(&plugin_dir, &manifest, expected_uid)
+            .expect_err("no embedded key + empty trusted dir must refuse a valid signature");
+
+        assert!(matches!(err, VerifyError::UntrustedSigner));
     }
 
     /// Flips one base64 character (to a different, still-valid base64

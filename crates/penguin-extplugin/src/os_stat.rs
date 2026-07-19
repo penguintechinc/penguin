@@ -28,7 +28,12 @@ pub struct FileMeta {
 
 /// Source of file metadata, injected into `Verifier` so tests can fake
 /// ownership/permission bits without running the suite as another uid.
-pub trait StatSource {
+///
+/// `Send + Sync` is a supertrait (not just a bound where `Verifier` uses it)
+/// so every `dyn StatSource` trait object — including the boxed one
+/// `Verifier` stores — is `Send + Sync` too, letting `Verifier` itself be
+/// held across an `.await` point in async callers.
+pub trait StatSource: Send + Sync {
     /// Stats `path`, returning its permission bits and owning uid.
     fn stat(&self, path: &Path) -> io::Result<FileMeta>;
 }
