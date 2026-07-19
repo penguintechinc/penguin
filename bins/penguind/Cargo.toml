@@ -25,6 +25,9 @@ penguin-proto.workspace = true
 # bins/penguin/Cargo.toml.
 penguin-secrets = { path = "../../crates/penguin-secrets" }
 penguin-licensing = { path = "../../crates/penguin-licensing" }
+# Built-in module registry (squawk, and future built-ins) — see
+# `src/daemon_main.rs`'s `SupervisorConfig::registry` wiring.
+penguin-registry = { path = "../../crates/penguin-registry" }
 
 tokio.workspace = true
 tokio-stream.workspace = true

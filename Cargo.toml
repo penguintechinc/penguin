@@ -152,6 +152,15 @@ reqwest = { version = "0.13", default-features = false, features = [
 ] }
 webpki-roots = "1"
 
+# DNS message encode/decode for the :53 forwarder. The DoH client itself speaks
+# JSON REST (not RFC 8484 binary), so this is only needed on the local side
+# where we terminate real DNS traffic from the host's resolver.
+hickory-proto = "0.26.1"
+# systemd-resolved over D-Bus. zbus is pure Rust — no libdbus C dependency.
+# Linux-only; the Go build stubbed this path out entirely and fell back to
+# rewriting /etc/resolv.conf, which fights resolved on any modern distro.
+zbus = { version = "5", default-features = false, features = ["tokio"] }
+
 # Metrics. tikv's prometheus crate (not the abandoned one); `process` adds the
 # /proc-based process collector that mirrors the Go process collector. Default
 # features stay on — gather()'s protobuf model and the process collector rely

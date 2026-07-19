@@ -181,7 +181,95 @@ needs to know which socket was tried.
 **Rust:** the same
 `cannot reach penguind at %s — is the daemon running?` message everywhere.
 
-### 1.15 The HostService broker leg was dead code, and mis-TLS'd behind that (M3)
+### 1.15 Enabling the DNS forwarder deadlocked the daemon (M5)
+
+`forwarder.Start(ctx)` binds its listeners and then **blocks** on a select that
+only returns when the context is cancelled. The squawk module calls it
+*synchronously from `Module.Start`, while holding its own mutex*, and the
+supervisor passes a module-lifetime context that is cancelled only on unload.
+
+So with `forwarder.enabled: true`:
+`Supervisor::load` never returns, and `Stop`/`Unload` then block forever trying
+to take the mutex `Start` still holds — which is also what would have cancelled
+the context and unblocked it. A complete deadlock, no timeout, on the module's
+primary feature.
+
+The Go test bounds it with a 5-second context and asserts only that `Start`
+"completes without panic" — it never asserts that `Start` returns *promptly*,
+so the hang reads as a pass.
+
+**Rust:** `start()` binds the sockets synchronously — so a bind failure still
+surfaces immediately and honestly — then spawns the serve loop as a background
+task owned by the module. `stop()` signals it with a cancellation token.
+`start()` never blocks.
+
+### 1.16 `squawk license status` could never work (M5)
+
+`handleLicense` builds a license config with `ValidateOnline: true` but never
+sets `ServerURL`, and `ModuleConfig` has no field to supply one. Every call
+therefore requests a schemeless relative URL and fails before any network I/O.
+The command always reports an error — and always exits **0**, so a caller cannot
+detect it from the exit status.
+
+**Rust:** a real `license.server_url` config field (defaulting to squawk's own
+`https://license.squawkdns.com`), and a non-zero exit code when validation
+fails.
+
+Note these are **two unrelated licensing systems**, easily conflated:
+`HostServices::license()` is PenguinTech's entitlement service, while squawk's
+own validator talks to squawkdns.com about Squawk product keys. The module's
+`license` command uses only the latter; `LicenseFeature` is deliberately empty
+because Squawk is core and must load with no license server at all.
+
+### 1.17 A corrupt DNS backup marker wedged recovery permanently (M5)
+
+`RecoverFromCrash` treats an unparseable marker exactly like a missing one:
+returns `nil`, logs nothing above debug, and **never deletes or quarantines the
+file**. Every subsequent daemon start hits the same silent no-op, so the host's
+DNS is never restored and the operator is never told. A test asserts this
+"no error" behaviour as correct.
+
+**Rust:** a corrupt marker is a loud warning and gets quarantined (renamed), so
+recovery is attempted once and the evidence is preserved rather than the failure
+repeating in silence forever.
+
+### 1.18 "0600" backup files were often not 0600 (M5)
+
+Go writes its DNS backups with `os.WriteFile(path, data, 0o600)`. That mode
+argument is only applied when the file is **created** — for a file that already
+exists, the permissions are left untouched. `/etc/resolv.conf`'s backup and the
+crash marker are both rewritten on every apply, so after the first run they keep
+whatever mode they already had, not 0600. The same POSIX gap exists in Rust's
+`OpenOptions::mode()`.
+
+**Rust:** an explicit `chmod` after writing, so the mode is what the code claims
+regardless of whether the file pre-existed.
+
+### 1.19 The DNS crash marker was written after the damage, not before (M5)
+
+Go applies the resolver change first and writes the crash marker afterwards, so
+a crash in between leaves the host's DNS modified with **no marker at all** —
+nothing ever restores it, and the operator is never told.
+
+**Rust** inverts the ordering: the read-only snapshot and any durable per-backend
+backup happen first, then the marker is written, and only then is the host
+actually mutated. "A marker exists" becomes a *precondition* for "DNS may have
+changed" rather than a record that it did, so a crash before the marker provably
+means nothing was touched and a crash after is always recoverable. The remaining
+sub-millisecond window can orphan one inert backup file, which the next apply
+cleans up.
+
+### 1.20 CNAME chains were silently mangled (M5)
+
+Go's answer conversion builds every returned resource record using the
+**question's** type and owner name, for every entry in the answer array. A
+CNAME→A chain therefore loses the CNAME entirely, and the A record is returned
+under the wrong owner name. Any client relying on the chain sees a subtly wrong
+answer rather than an error.
+
+**Rust:** each answer is converted using its own `name` and `type` fields.
+
+### 1.21 The HostService broker leg was dead code, and mis-TLS'd behind that (M3)
 
 Two stacked bugs:
 
@@ -285,6 +373,10 @@ a trap for whoever next assumes it works.
 | Telemetry PII sanitisation | hand-applied `maskSecret` convention at call sites | a sanitiser applied to *every* field at the single logging boundary, so a module author cannot forget | M1 |
 | Crash detection | see §1.5 | health-poll loop | M2 |
 | Encrypted-file secret backend | delegated to 99designs/keyring (JWE) | implemented directly: XChaCha20-Poly1305, per-record nonce, AAD bound to the namespaced key | M4 |
+| squawk DNS cache | **none at all** — every forwarded query round-trips upstream, while `ConfigSchema` still advertises a `cache.enabled` toggle with nothing behind it, and `cache stats`/`cache flush` return canned text | a real TTL-respecting answer cache keyed on (name, qtype), which also makes `cache.enabled`, `cache stats`, and `cache flush` mean something | M5 |
+| squawk `time` | hardcoded JSON saying NTP/NTS is "not currently exposed" | a real SNTP offset query (the self-contained plain-UDP client, not the NTS/interceptor stack, which stays out of scope) | M5 |
+| systemd-resolved | the apply/restore path is a stub that **always errors**, so it silently falls through to clobbering `/etc/resolv.conf` — fighting the resolver that owns it on most modern distros | implemented for real over D-Bus (`org.freedesktop.resolve1`), with the resolv.conf path kept as the fallback it was meant to be | M5 |
+| squawk metrics | four of five are registered and **never written** (`queries_total`, `cache_entries`, `health_status`), and `forwarder_up` is not updated by the `forward start`/`stop` commands so it drifts from reality | all five actually wired to the values they claim to report | M5 |
 | Tray menu | `internal/tray/model.go` builds a model, but the shell's `onReady` only wires static Refresh/Quit — the model is largely unused | full menu model as a pure, GUI-free crate: nested `tray:true` subtrees (Go flattens), per-module load/unload, severity combining state *and* health so a `Failed` module reads urgent before a health probe lands | M4 |
 
 ### A recurring shape

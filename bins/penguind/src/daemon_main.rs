@@ -7,7 +7,6 @@
 //! module only ever runs the daemon in the Go reference's "interactive mode"
 //! shape: serve directly, wait for a signal, shut down.
 
-use std::collections::BTreeMap;
 use std::env;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -234,7 +233,9 @@ async fn run_daemon() -> Result<(), DaemonBinError> {
     ));
 
     let supervisor = Supervisor::new(SupervisorConfig {
-        registry: BTreeMap::new(), // no built-in modules until M5/M6
+        // M5: squawk is the first real built-in module (penguin-tobogganing
+        // lands in its own later milestone).
+        registry: penguin_registry::builtin_modules(),
         host_factory,
         broker: broker.clone(),
         state_dir: args.state_dir.clone(),

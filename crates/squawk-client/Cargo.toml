@@ -10,3 +10,35 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+# License-server and DoH-server HTTP client. Default features stay off (see
+# root Cargo.toml comment on the reqwest entry): the workspace is pinned to
+# aws-lc-rs, so TLS is wired manually with rustls + webpki-roots, matching
+# penguin-licensing's client.
+# `query` adds `RequestBuilder::query` (the DoH client's `?name=&type=`
+# GET params) on top of the workspace's base feature set — additive, not a
+# fork of the pinned version.
+reqwest = { workspace = true, features = ["query"] }
+rustls.workspace = true
+webpki-roots.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+# DNS message encode/decode for the :53 forwarder — the DoH client itself
+# speaks JSON REST, so this is only needed on the local listener side.
+hickory-proto.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+# PEM cert/key loading for the DoH client's optional mTLS config, and DoH
+# server-URL parsing/normalization. Already resolved transitively (reqwest
+# and hickory-proto both pull it in), so this adds no new crate to the
+# dependency graph — only a direct name for one already being built.
+base64.workspace = true
+url = "2"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
+# Isolated per-test temp directories/files (PEM fixtures, cache-dir-style
+# tests) — already in Cargo.lock transitively (rustls-platform-verifier),
+# matching penguin-licensing's dev-dependency comment.
+tempfile = "3"
