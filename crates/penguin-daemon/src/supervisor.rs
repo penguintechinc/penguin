@@ -750,6 +750,7 @@ mod tests {
     use tempfile::TempDir;
 
     use crate::broker::EventReceiver;
+    use crate::host::SecretStoreProvider;
 
     /// A configurable [`Module`] test double. Config and counters live in
     /// atomics/mutexes (never closures) so one control block can be shared
@@ -909,6 +910,9 @@ mod tests {
     }
 
     /// Minimal [`SecretStore`] double; supervisor tests never exercise it.
+    /// Also implements [`SecretStoreProvider`], handing every module the
+    /// same no-op instance — real per-module isolation is `host.rs`'s and
+    /// `bins/penguind`'s concern, not this file's.
     struct FakeSecretStore;
     #[async_trait]
     impl SecretStore for FakeSecretStore {
@@ -920,6 +924,11 @@ mod tests {
         }
         async fn delete(&self, _key: &str) -> Result<(), SecretError> {
             Ok(())
+        }
+    }
+    impl SecretStoreProvider for FakeSecretStore {
+        fn store_for(&self, _module: &str) -> Arc<dyn SecretStore> {
+            Arc::new(FakeSecretStore)
         }
     }
 

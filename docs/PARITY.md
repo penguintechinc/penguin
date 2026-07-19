@@ -150,7 +150,38 @@ every success check, and cross-checks the `Version` RPC's result against the
 daemon binary's own reported version. **Never assert on a CLI's exit status
 alone when that CLI is known to swallow errors.**
 
-### 1.12 The HostService broker leg was dead code, and mis-TLS'd behind that (M3)
+### 1.12 `penguin logs --follow` silently died after 30 seconds (M4)
+
+The Go CLI creates one 30-second context and reuses it for the entire `TailLogs`
+call — *including* the follow loop. A `--follow` session therefore stops after 30
+seconds. Because the same code swallows the resulting error (§1.11), it stops
+**silently**: no message, exit 0, as if the log had simply ended.
+
+**Rust:** the timeout bounds only establishing the stream; the receive loop then
+runs until the user stops it or the daemon goes away.
+
+### 1.13 A flag with an unrecognised type vanished (M4)
+
+The Go CLI's flag builder switches on `FlagSpec.type` with **no default arm**, so
+a module declaring a flag whose type is not `string`/`bool`/`int` has that flag
+silently dropped from the command tree — no warning, no error, the flag simply
+does not exist. Its own test never asserts the unknown-type flag is present, so
+the gap was never visible.
+
+**Rust:** an unrecognised type falls back to `string`, matching the precedent
+already set by `penguin_sdk::command::FlagType::parse`.
+
+### 1.14 The friendly daemon-down message only fired for static verbs (M4)
+
+Go's `friendly()` wrapper applies to the built-in verbs, but an error-wrapping
+quirk means module dispatch instead surfaces a bare `daemon unreachable` with no
+socket path — the least useful message in exactly the case where the user most
+needs to know which socket was tried.
+
+**Rust:** the same
+`cannot reach penguind at %s — is the daemon running?` message everywhere.
+
+### 1.15 The HostService broker leg was dead code, and mis-TLS'd behind that (M3)
 
 Two stacked bugs:
 
@@ -227,7 +258,14 @@ DACL is the entire authorization boundary and the interceptor is a no-op. This
 asymmetry is intentional upstream and is preserved rather than "helpfully"
 hardened, so both platforms behave as documented.
 
-### 2.6 The embedded publisher key is malformed (M3)
+### 2.6 Log timestamps render in UTC, not local time (M4)
+
+The Go CLI formats `penguin logs` timestamps in the host's local timezone. Rust
+renders UTC, because matching local time means either a timezone-database
+dependency or libc `localtime_r` plumbing, and neither is worth it for a log
+tail. Cosmetic and user-visible; revisit at M8 if it grates.
+
+### 2.7 The embedded publisher key is malformed (M3)
 
 Go's `embeddedPublicKey` decodes to 41 bytes; a valid minisign key is 42. The
 constant is an unfilled placeholder and can never verify anything — the real
@@ -246,10 +284,35 @@ a trap for whoever next assumes it works.
 | `TailLogs` | returns `UNIMPLEMENTED` though the proto declares the stream | real bounded log ring buffer per source, backlog replay + `follow` | M2 |
 | Telemetry PII sanitisation | hand-applied `maskSecret` convention at call sites | a sanitiser applied to *every* field at the single logging boundary, so a module author cannot forget | M1 |
 | Crash detection | see §1.5 | health-poll loop | M2 |
+| Encrypted-file secret backend | delegated to 99designs/keyring (JWE) | implemented directly: XChaCha20-Poly1305, per-record nonce, AAD bound to the namespaced key | M4 |
+| Tray menu | `internal/tray/model.go` builds a model, but the shell's `onReady` only wires static Refresh/Quit — the model is largely unused | full menu model as a pure, GUI-free crate: nested `tray:true` subtrees (Go flattens), per-module load/unload, severity combining state *and* health so a `Failed` module reads urgent before a health probe lands | M4 |
+
+### A recurring shape
+
+Three of the entries above and three in §1 are the same failure: **the component was written, tested, and never connected.** The event broker, the supervisor's restart machine, the plugin HostService leg, and the tray model were all implemented competently and left unreachable by their callers.
+
+Component-level tests cannot see this — each unit passes in isolation precisely because the wiring is what is missing. It is worth remembering when reading the Go build's 90%+ coverage: coverage measures whether code ran under test, not whether anything in production calls it.
 
 ---
 
-## 4. Scope deferrals (not divergences)
+## 3a. Deliberate non-features
+
+Things that look absent but are absent **on purpose**. Recorded so a future
+reader does not "restore" them.
+
+### No domain-based license bypass (M4)
+
+PenguinTech's platform standards describe a domain-based bypass for license
+checks. The Go endpoint agent implements **none** — it never inspects a
+deployment domain, and there is no env var or config flag that disables
+licensing either. That rule is for web services evaluating their own serving
+domain; a desktop endpoint agent has no equivalent notion.
+
+The Rust client ports this faithfully: **no bypass mechanism of any kind**, with
+a test (`no_domain_based_bypass_exists`) pinning it. Adding one would introduce a
+security-relevant escape hatch that has never existed in this product. If a
+bypass is ever genuinely wanted here, it needs a deliberate design, not an
+inference from a rule written for a different tier.
 
 These are unimplemented *yet*, tracked to their milestone, and listed so they are
 not mistaken for parity gaps.

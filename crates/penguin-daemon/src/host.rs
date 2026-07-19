@@ -76,19 +76,46 @@ impl HostServices for DaemonHost {
     }
 }
 
+/// Supplies the secret store a single module sees.
+///
+/// Implementations MUST return a view scoped to `module`; two different
+/// module names must never be able to read or overwrite each other's
+/// secrets. This is what the Go reference gets from downcasting to
+/// `*secrets.Store` and calling `Namespaced(moduleName)`
+/// (`go-client/internal/daemon/host.go`) — making isolation a trait
+/// [`DaemonHostFactory`] must call through, rather than an `Arc<dyn
+/// SecretStore>` it could simply share, closes that parity gap at the type
+/// level instead of relying on every caller to remember to wrap one.
+///
+/// `penguin-daemon` deliberately depends on no concrete secrets backend
+/// (see [`DaemonHostFactory`]'s doc), so this trait is expressed purely in
+/// terms of [`SecretStore`] from `penguin-sdk`. The production
+/// implementation, backed by `penguin_secrets::Store::namespaced`, lives in
+/// `bins/penguind/src/host_wiring.rs`.
+pub trait SecretStoreProvider: Send + Sync {
+    /// Returns the secret store `module` is allowed to see.
+    fn store_for(&self, module: &str) -> Arc<dyn SecretStore>;
+}
+
 /// Builds a [`DaemonHost`] for every module from one shared set of daemon
 /// subsystems.
 ///
-/// `secrets` and `license` are injected rather than constructed here: they
-/// come from `penguin-secrets`/`penguin-licensing`, which land in M4, and the
-/// `penguind` binary supplies whatever backs them (including test doubles).
-/// `events` must be the same [`crate::broker::EventBroker`] instance the
-/// daemon's gRPC `WatchEvents` subscribes to — that sharing is what fixes the
-/// Go double-broker bug (see the `lib.rs` module doc).
+/// `secrets` is a [`SecretStoreProvider`] rather than a bare `Arc<dyn
+/// SecretStore>`: [`host_for`](DaemonHostFactory::host_for) calls
+/// [`SecretStoreProvider::store_for`] once per module, so per-module secret
+/// isolation is part of this type's contract instead of something a caller
+/// could forget to layer on afterward. `license`, by contrast, has no
+/// per-module wrapping — one shared licensing client is correct here,
+/// matching the Go reference. Neither is constructed in this crate: they
+/// come from `penguin-secrets`/`penguin-licensing`, and the `penguind`
+/// binary supplies whatever backs them (including test doubles). `events`
+/// must be the same [`crate::broker::EventBroker`] instance the daemon's
+/// gRPC `WatchEvents` subscribes to — that sharing is what fixes the Go
+/// double-broker bug (see the `lib.rs` module doc).
 pub struct DaemonHostFactory {
     telemetry: Arc<Telemetry>,
     config_store: Arc<ConfigStore>,
-    secrets: Arc<dyn SecretStore>,
+    secrets: Arc<dyn SecretStoreProvider>,
     license: Arc<dyn LicenseChecker>,
     events: Arc<dyn EventSink>,
     state_dir: PathBuf,
@@ -96,11 +123,13 @@ pub struct DaemonHostFactory {
 
 impl DaemonHostFactory {
     /// Builds a factory sharing `telemetry`, `config`, `secrets`, `license`,
-    /// and `events` across every module it constructs a host for.
+    /// and `events` across every module it constructs a host for. `secrets`
+    /// still yields each module its own isolated view — see
+    /// [`SecretStoreProvider`].
     pub fn new(
         telemetry: Arc<Telemetry>,
         config: Arc<ConfigStore>,
-        secrets: Arc<dyn SecretStore>,
+        secrets: Arc<dyn SecretStoreProvider>,
         license: Arc<dyn LicenseChecker>,
         events: Arc<dyn EventSink>,
         state_dir: PathBuf,
@@ -124,7 +153,7 @@ impl HostFactory for DaemonHostFactory {
 
         Arc::new(DaemonHost {
             logger: logger.clone(),
-            secrets: self.secrets.clone(),
+            secrets: self.secrets.store_for(module),
             license: self.license.clone(),
             metrics: self.telemetry.module_registerer(module),
             data_dir,
@@ -202,6 +231,7 @@ fn set_dir_builder_mode(_builder: &mut std::fs::DirBuilder) {}
 mod tests {
     use super::*;
     use std::collections::HashMap;
+    use std::sync::Mutex;
 
     use async_trait::async_trait;
     use penguin_sdk::SecretError;
@@ -209,21 +239,51 @@ mod tests {
 
     use crate::broker::EventBroker;
 
-    /// A [`SecretStore`] double that always reports "not found"; host tests
-    /// only need to prove the same instance flows through unchanged, never
-    /// exercise real secret storage.
-    struct FakeSecretStore;
+    /// A trivial in-memory [`SecretStore`]; used only through
+    /// [`FakeSecretStoreProvider`] below, never constructed directly.
+    #[derive(Default)]
+    struct InMemorySecretStore {
+        values: Mutex<HashMap<String, Vec<u8>>>,
+    }
 
     #[async_trait]
-    impl SecretStore for FakeSecretStore {
-        async fn get(&self, _key: &str) -> Result<Vec<u8>, SecretError> {
-            Err(SecretError::NotFound)
+    impl SecretStore for InMemorySecretStore {
+        async fn get(&self, key: &str) -> Result<Vec<u8>, SecretError> {
+            let values = self.values.lock().unwrap();
+            values.get(key).cloned().ok_or(SecretError::NotFound)
         }
-        async fn set(&self, _key: &str, _value: &[u8]) -> Result<(), SecretError> {
+        async fn set(&self, key: &str, value: &[u8]) -> Result<(), SecretError> {
+            let mut values = self.values.lock().unwrap();
+            values.insert(key.to_string(), value.to_vec());
             Ok(())
         }
-        async fn delete(&self, _key: &str) -> Result<(), SecretError> {
+        async fn delete(&self, key: &str) -> Result<(), SecretError> {
+            let mut values = self.values.lock().unwrap();
+            let Some(_removed) = values.remove(key) else {
+                return Err(SecretError::NotFound);
+            };
             Ok(())
+        }
+    }
+
+    /// A [`SecretStoreProvider`] test double that hands each module name its
+    /// own [`InMemorySecretStore`] — modeling the same per-module isolation
+    /// contract the production implementation provides over
+    /// `penguin_secrets::Store::namespaced` (see `bins/penguind`'s
+    /// `host_wiring.rs`), without pulling that concrete backend into this
+    /// library crate's own tests.
+    #[derive(Default)]
+    struct FakeSecretStoreProvider {
+        modules: Mutex<HashMap<String, Arc<InMemorySecretStore>>>,
+    }
+
+    impl SecretStoreProvider for FakeSecretStoreProvider {
+        fn store_for(&self, module: &str) -> Arc<dyn SecretStore> {
+            let mut modules = self.modules.lock().unwrap();
+            let store = modules
+                .entry(module.to_string())
+                .or_insert_with(|| Arc::new(InMemorySecretStore::default()));
+            store.clone()
         }
     }
 
@@ -251,7 +311,7 @@ mod tests {
         let factory = DaemonHostFactory::new(
             telemetry,
             config_store,
-            Arc::new(FakeSecretStore),
+            Arc::new(FakeSecretStoreProvider::default()),
             Arc::new(FakeLicenseChecker),
             broker,
             state_dir.path().to_path_buf(),
@@ -337,7 +397,7 @@ mod tests {
         let factory = DaemonHostFactory::new(
             telemetry,
             config_store,
-            Arc::new(FakeSecretStore),
+            Arc::new(FakeSecretStoreProvider::default()),
             Arc::new(FakeLicenseChecker),
             broker,
             blocking_file.clone(),
@@ -348,14 +408,90 @@ mod tests {
     }
 
     #[test]
-    fn host_for_shares_the_same_injected_secrets_and_license_across_modules() {
+    fn host_for_shares_the_same_injected_license_across_modules() {
+        // One shared licensing client is correct here — unlike secrets, this
+        // matches the Go reference, which never namespaces license checks
+        // per module.
         let (_config_dir, _state_dir, factory) = test_factory();
-        let a = factory.host_for("a", None);
-        let b = factory.host_for("b", None);
+        let host_a = factory.host_for("module-a", None);
+        let host_b = factory.host_for("module-b", None);
 
-        assert_eq!(a.license().tier(), b.license().tier());
-        assert!(Arc::ptr_eq(&a.secrets(), &b.secrets()));
-        assert!(Arc::ptr_eq(&a.license(), &b.license()));
+        assert_eq!(host_a.license().tier(), host_b.license().tier());
+        assert!(Arc::ptr_eq(&host_a.license(), &host_b.license()));
+    }
+
+    #[tokio::test]
+    async fn host_for_gives_two_modules_isolated_secret_values_for_the_same_key() {
+        let (_config_dir, _state_dir, factory) = test_factory();
+        let host_a = factory.host_for("module-a", None);
+        let host_b = factory.host_for("module-b", None);
+
+        host_a
+            .secrets()
+            .set("api_key", b"secret-a")
+            .await
+            .expect("a set");
+        host_b
+            .secrets()
+            .set("api_key", b"secret-b")
+            .await
+            .expect("b set");
+
+        assert_eq!(
+            host_a.secrets().get("api_key").await.expect("a get"),
+            b"secret-a"
+        );
+        assert_eq!(
+            host_b.secrets().get("api_key").await.expect("b get"),
+            b"secret-b"
+        );
+    }
+
+    #[tokio::test]
+    async fn host_for_deleting_one_modules_secret_leaves_anothers_intact() {
+        let (_config_dir, _state_dir, factory) = test_factory();
+        let host_a = factory.host_for("module-a", None);
+        let host_b = factory.host_for("module-b", None);
+
+        host_a
+            .secrets()
+            .set("api_key", b"secret-a")
+            .await
+            .expect("a set");
+        host_b
+            .secrets()
+            .set("api_key", b"secret-b")
+            .await
+            .expect("b set");
+
+        host_a.secrets().delete("api_key").await.expect("a delete");
+
+        let after_delete = host_a.secrets().get("api_key").await.unwrap_err();
+        assert!(matches!(after_delete, SecretError::NotFound));
+        assert_eq!(
+            host_b
+                .secrets()
+                .get("api_key")
+                .await
+                .expect("b still present"),
+            b"secret-b"
+        );
+    }
+
+    #[tokio::test]
+    async fn host_for_a_module_cannot_read_a_key_written_under_another_modules_namespace() {
+        let (_config_dir, _state_dir, factory) = test_factory();
+        let host_a = factory.host_for("module-a", None);
+        let host_b = factory.host_for("module-b", None);
+
+        host_b
+            .secrets()
+            .set("only_in_b", b"secret-b")
+            .await
+            .expect("b set");
+
+        let err = host_a.secrets().get("only_in_b").await.unwrap_err();
+        assert!(matches!(err, SecretError::NotFound));
     }
 
     #[tokio::test]
@@ -370,7 +506,7 @@ mod tests {
         let factory = DaemonHostFactory::new(
             telemetry,
             config_store,
-            Arc::new(FakeSecretStore),
+            Arc::new(FakeSecretStoreProvider::default()),
             Arc::new(FakeLicenseChecker),
             events,
             state_dir.path().to_path_buf(),

@@ -10,3 +10,16 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+# All tree-building, request-shaping, and rendering logic lives here — this
+# binary only owns the socket connection and stdin/stdout. Not a workspace
+# dependency (only added there per-milestone as each crate lands), so it is
+# referenced by path.
+penguin-cli-core = { path = "../../crates/penguin-cli-core" }
+penguin-proto.workspace = true
+# The daemon connection itself. Kept out of penguin-cli-core so that crate
+# never links a socket, matching penguin-daemon's own split between library
+# and transport (see that crate's Cargo.toml).
+penguin-ipc.workspace = true
+tonic.workspace = true
+tokio.workspace = true
+clap.workspace = true

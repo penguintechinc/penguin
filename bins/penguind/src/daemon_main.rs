@@ -8,6 +8,7 @@
 //! shape: serve directly, wait for a signal, shut down.
 
 use std::collections::BTreeMap;
+use std::env;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -20,7 +21,7 @@ use tonic::transport::Server;
 use penguin_daemon::broker::EventBroker;
 use penguin_daemon::config::{ConfigStore, DaemonConfig};
 use penguin_daemon::external::{ExternalLoader, PluginDirLoader};
-use penguin_daemon::host::{DaemonHostFactory, HostFactory};
+use penguin_daemon::host::{DaemonHostFactory, HostFactory, SecretStoreProvider};
 use penguin_daemon::lock::{self, LockError};
 use penguin_daemon::logring::LogRing;
 use penguin_daemon::service::DaemonService;
@@ -28,11 +29,13 @@ use penguin_daemon::supervisor::{Supervisor, SupervisorConfig};
 use penguin_ipc::groups_unix::SystemGroups;
 use penguin_ipc::listen_unix::{self, ListenerConfig, PeerAuthInterceptor};
 use penguin_ipc::{GroupResolver, IpcError};
+use penguin_licensing::{LicenseClient, LicenseClientOptions};
 use penguin_proto::daemon::v1::daemon_server::DaemonServer;
-use penguin_sdk::{EventSink, LicenseChecker, SecretStore};
+use penguin_sdk::{EventSink, LicenseChecker, SecretError};
+use penguin_secrets::{Backend as SecretsBackend, Config as SecretsConfig, Store as SecretsStore};
 use penguin_telemetry::{Telemetry, TelemetryError};
 
-use crate::stubs::{FreeTierLicenseChecker, InMemorySecretStore};
+use crate::host_wiring::SecretsStoreProvider;
 use crate::{VERSION, logging};
 
 /// Log lines retained per source (a module name, or `""` for the daemon
@@ -54,6 +57,11 @@ const HEALTH_POLL_INTERVAL: Duration = Duration::from_secs(30);
 /// restart budget. Same "no Go equivalent" caveat as
 /// [`HEALTH_POLL_INTERVAL`].
 const STABILITY_WINDOW: Duration = Duration::from_secs(5 * 60);
+
+/// How often the license client re-validates against `license.penguintech.io`
+/// in the background. Matches the Go client's default
+/// `Options.RefreshInterval` (`go-client/internal/licensing/client.go`).
+const LICENSE_REFRESH_INTERVAL: Duration = Duration::from_secs(5 * 60);
 
 /// Command-line flags for normal daemon startup. The `version`/`--version`
 /// and `service` short-circuits in [`super::main`] never reach this parser.
@@ -88,6 +96,12 @@ enum DaemonBinError {
     /// to validate.
     #[error(transparent)]
     Telemetry(#[from] TelemetryError),
+    /// Opening the encrypted-file secret store failed — fatal, matching
+    /// Go's `secrets.Open` failure path in `cmd/penguind/service.go` (it
+    /// releases the single-instance lock and returns an error rather than
+    /// starting with no secret storage at all).
+    #[error("init secrets store: {0}")]
+    Secrets(#[from] SecretError),
     /// Binding the control socket failed.
     #[error(transparent)]
     Listen(#[from] IpcError),
@@ -152,12 +166,47 @@ async fn run_daemon() -> Result<(), DaemonBinError> {
 
     let broker = Arc::new(EventBroker::new(EVENT_BROKER_CAPACITY));
     let events: Arc<dyn EventSink> = broker.clone();
-    let secrets: Arc<dyn SecretStore> = Arc::new(InMemorySecretStore::new());
-    let license: Arc<dyn LicenseChecker> = Arc::new(FreeTierLicenseChecker);
+
+    // Real M4 secret store: XChaCha20-Poly1305-encrypted files under
+    // `<state_dir>/secrets`, with the master key alongside them (see
+    // `penguin_secrets::file_backend`). `FileOnly` is deliberate, not a
+    // placeholder — the daemon is headless, and `Backend::Auto` would probe
+    // a platform keyring/Secret Service, which must never happen here (see
+    // that crate's module doc, "Never let a test touch a real OS keyring" —
+    // the same reasoning applies in production for a service with no
+    // desktop session).
+    let secrets_root = Arc::new(SecretsStore::open(SecretsConfig {
+        service_name: String::new(),
+        backend: SecretsBackend::FileOnly {
+            file_dir: args.state_dir.join("secrets"),
+        },
+    })?);
+
+    // Real M4 license client: license.penguintech.io with an offline cache
+    // under `<state_dir>/license`. `LICENSE_KEY` matches the env var Go
+    // reads in `cmd/penguind/service.go`. A missing/empty key or an
+    // unreachable server both degrade gracefully — see `LicenseClient`'s own
+    // doc — rather than stopping the daemon from starting.
+    let license_client = Arc::new(LicenseClient::new(LicenseClientOptions {
+        license_key: env::var("LICENSE_KEY").unwrap_or_default(),
+        product: String::new(),
+        base_url: String::new(),
+        cache_dir: Some(args.state_dir.join("license")),
+    }));
+    let license_refresh = license_client.spawn_background_refresh(LICENSE_REFRESH_INTERVAL);
+    let license: Arc<dyn LicenseChecker> = license_client;
+
+    // Per-module secret isolation is part of DaemonHostFactory's own
+    // contract (see `penguin_daemon::host::SecretStoreProvider`):
+    // `SecretsStoreProvider` gives every module its own
+    // `secrets_root.namespaced(module)` view, so `host_for` never hands two
+    // modules the same store.
+    let secrets_provider: Arc<dyn SecretStoreProvider> =
+        Arc::new(SecretsStoreProvider::new(secrets_root));
     let host_factory: Arc<dyn HostFactory> = Arc::new(DaemonHostFactory::new(
         telemetry,
         Arc::new(config_store),
-        secrets,
+        secrets_provider,
         license,
         events,
         args.state_dir.clone(),
@@ -228,6 +277,7 @@ async fn run_daemon() -> Result<(), DaemonBinError> {
 
     tracing::info!("shutting down");
     supervisor.shutdown().await;
+    license_refresh.stop().await;
     let _ = std::fs::remove_file(&daemon_cfg.socket_path);
 
     serve_result.map_err(DaemonBinError::Serve)

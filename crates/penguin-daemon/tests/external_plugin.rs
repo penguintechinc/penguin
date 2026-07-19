@@ -41,7 +41,7 @@ use tempfile::TempDir;
 use penguin_daemon::broker::EventBroker;
 use penguin_daemon::config::ConfigStore;
 use penguin_daemon::external::{ExternalLoader, PluginDirLoader};
-use penguin_daemon::host::{DaemonHostFactory, HostFactory};
+use penguin_daemon::host::{DaemonHostFactory, HostFactory, SecretStoreProvider};
 use penguin_daemon::supervisor::{Supervisor, SupervisorConfig, SupervisorError};
 use penguin_sdk::{EventSink, LicenseChecker, ModuleState, SecretError, SecretStore};
 
@@ -221,7 +221,10 @@ fn any_process_running(binary_path: &Path) -> bool {
     false
 }
 
-/// A [`SecretStore`] double; these tests never exercise it.
+/// A [`SecretStore`] double; these tests never exercise it. Also implements
+/// [`SecretStoreProvider`], handing every module the same no-op instance —
+/// real per-module isolation is covered by `penguin-daemon`'s own `host.rs`
+/// tests and `bins/penguind`'s `host_wiring.rs`, not this integration test.
 struct FakeSecretStore;
 #[async_trait]
 impl SecretStore for FakeSecretStore {
@@ -233,6 +236,11 @@ impl SecretStore for FakeSecretStore {
     }
     async fn delete(&self, _key: &str) -> Result<(), SecretError> {
         Ok(())
+    }
+}
+impl SecretStoreProvider for FakeSecretStore {
+    fn store_for(&self, _module: &str) -> Arc<dyn SecretStore> {
+        Arc::new(FakeSecretStore)
     }
 }
 

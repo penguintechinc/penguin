@@ -49,7 +49,12 @@ pub trait SecretStore: Send + Sync {
     async fn get(&self, key: &str) -> Result<Vec<u8>, SecretError>;
     /// Stores (or replaces) a secret.
     async fn set(&self, key: &str, value: &[u8]) -> Result<(), SecretError>;
-    /// Deletes a secret; deleting a missing key is not an error.
+    /// Deletes a secret. Deleting a key that does not exist returns
+    /// [`SecretError::NotFound`] rather than succeeding silently — this matches
+    /// the Go store, and Go-built plugins rely on it across the plugin boundary
+    /// (their host proxy maps the string `"not found"` back to the same
+    /// sentinel). An idempotent delete would read more nicely, but it would
+    /// change behaviour existing modules already depend on.
     async fn delete(&self, key: &str) -> Result<(), SecretError>;
 }
 

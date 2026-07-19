@@ -6,9 +6,9 @@
 #[cfg(unix)]
 mod daemon_main;
 #[cfg(unix)]
-mod logging;
+mod host_wiring;
 #[cfg(unix)]
-mod stubs;
+mod logging;
 
 use std::process::ExitCode;
 

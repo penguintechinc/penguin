@@ -10,3 +10,24 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+# The trait this crate implements (LicenseChecker) plus the doc-comment
+# contract for it (sync, never blocks, never panics).
+penguin-sdk.workspace = true
+# License-server HTTP client. See the crate root doc comment for why the TLS
+# stack is wired manually (aws-lc-rs provider + webpki-roots) instead of using
+# reqwest's default feature set — the workspace entry now carries the correct
+# feature name, so this inherits normally.
+reqwest.workspace = true
+webpki-roots.workspace = true
+rustls.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+# tempfile is already present in Cargo.lock (pulled in transitively by
+# rustls-platform-verifier), so using it here for isolated per-test cache
+# directories adds no new crate to the dependency graph.
+tempfile = "3"

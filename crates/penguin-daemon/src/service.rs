@@ -587,7 +587,7 @@ mod tests {
 
     use crate::config::ConfigStore;
     use crate::external::{ExternalLoadError, ExternalLoader};
-    use crate::host::{DaemonHostFactory, HostFactory};
+    use crate::host::{DaemonHostFactory, HostFactory, SecretStoreProvider};
     use crate::supervisor::SupervisorConfig;
 
     /// Per-module mutable state a [`FakeModule`] reads/writes, shared via
@@ -748,7 +748,11 @@ mod tests {
         })
     }
 
-    /// A [`SecretStore`] double; service tests never exercise it.
+    /// A [`SecretStore`] double; service tests never exercise it. Also
+    /// implements [`SecretStoreProvider`], handing every module the same
+    /// no-op instance — safe here only because no test ever reads or writes
+    /// through it (real isolation is `host.rs`'s and `bins/penguind`'s
+    /// concern, not this file's).
     struct FakeSecretStore;
     #[async_trait]
     impl SecretStore for FakeSecretStore {
@@ -760,6 +764,11 @@ mod tests {
         }
         async fn delete(&self, _key: &str) -> Result<(), SecretError> {
             Ok(())
+        }
+    }
+    impl SecretStoreProvider for FakeSecretStore {
+        fn store_for(&self, _module: &str) -> Arc<dyn SecretStore> {
+            Arc::new(FakeSecretStore)
         }
     }
 

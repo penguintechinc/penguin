@@ -125,6 +125,33 @@ hyper-util = { version = "0.1", default-features = false, features = [
 # silently diverge there.
 nix = { version = "0.30", features = ["user", "fs"] }
 
+# OS keychain backends (Windows Credential Manager, macOS Keychain, Linux
+# Secret Service). Unlike Go's 99designs/keyring this crate has NO encrypted
+# -file fallback, so penguin-secrets implements that backend itself — which is
+# also why Go's JWE-encrypted files are not readable by it (see docs/PARITY.md).
+keyring = "4.1.5"
+# The file backend's cipher: XChaCha20-Poly1305, 24-byte random nonce prefixed
+# to each record, AAD bound to the namespaced key so a record cannot be moved
+# between keys.
+chacha20poly1305 = "0.10"
+# Master keys and decrypted secrets are wiped on drop rather than lingering.
+zeroize = { version = "1", features = ["derive"] }
+
+# License-server client. IMPORTANT: default features are off because reqwest's
+# stock TLS would pull in `ring`, and this workspace is pinned to aws-lc-rs for
+# the go-plugin P-521 work. Two crypto backends in one binary is a smell; the
+# gate is that `cargo tree -i ring` stays empty.
+reqwest = { version = "0.13", default-features = false, features = [
+    "json",
+    # "rustls-no-provider" (NOT "rustls-tls-manual-roots-no-provider", which an
+    # earlier 0.13.x used) — the caller supplies both the crypto provider and
+    # the roots, which is exactly what we want: aws-lc-rs + webpki-roots.
+    "rustls-no-provider",
+    "http2",
+    "charset",
+] }
+webpki-roots = "1"
+
 # Metrics. tikv's prometheus crate (not the abandoned one); `process` adds the
 # /proc-based process collector that mirrors the Go process collector. Default
 # features stay on — gather()'s protobuf model and the process collector rely

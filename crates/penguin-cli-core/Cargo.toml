@@ -10,3 +10,22 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+# The wire contract only — never penguin-sdk or penguin-daemon. This crate
+# builds the CLI's command tree purely from what the daemon reports over
+# `ListCommands`, so it must not link module code (see the crate doc).
+penguin-proto.workspace = true
+# Runtime command-tree construction (the `ListCommands` tree is not known
+# until the daemon answers), so this crate needs clap's builder API, not the
+# derive macros. The workspace-pinned `clap` doesn't request the "string"
+# feature (nothing else needed it yet), but every `Arg`/`Command` name here
+# is built from an owned `String` off the wire — not a `&'static str` — so
+# `Id`/`Str`/`OsStr`'s `From<String>` impls (gated on "string") are required.
+# Cargo unifies features across the whole build, so adding it here is enough
+# for the entire workspace without editing the root manifest.
+clap = { workspace = true, features = ["string"] }
+# `tonic::Status`/`Code` are plain data here — interpreting an RPC failure's
+# code (`Unavailable`, `NotFound`, `PermissionDenied`) needs no transport and
+# no socket, which is what keeps the friendly-error mapping unit-testable.
+tonic.workspace = true
+serde.workspace = true
+serde_json.workspace = true

@@ -10,3 +10,8 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+# The ergonomic module/health/command types this crate turns into a menu.
+# Deliberately the *only* dependency: no GUI toolkit, no gRPC transport, no
+# I/O — the platform shells (M7) own that and hand this crate already-typed
+# data.
+penguin-sdk.workspace = true
