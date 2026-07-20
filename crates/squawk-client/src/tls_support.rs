@@ -32,3 +32,28 @@ pub(crate) fn supported_algorithms() -> WebPkiSupportedAlgorithms {
         .expect("rustls crypto provider must be installed before TLS use")
         .signature_verification_algorithms
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ensure_crypto_provider_installed_is_idempotent() {
+        // Two calls in the same process must not panic or otherwise
+        // conflict — the second call loses the install race and that is
+        // documented as fine, not an error.
+        ensure_crypto_provider_installed();
+        ensure_crypto_provider_installed();
+        assert!(CryptoProvider::get_default().is_some());
+    }
+
+    #[test]
+    fn supported_algorithms_reads_real_schemes_from_the_installed_provider() {
+        ensure_crypto_provider_installed();
+        let algorithms = supported_algorithms();
+        assert!(
+            !algorithms.supported_schemes().is_empty(),
+            "the installed aws-lc-rs provider must offer at least one signature scheme"
+        );
+    }
+}

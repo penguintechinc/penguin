@@ -38,7 +38,18 @@ COVER_EXCLUDE_ALWAYS := (crates/penguin-proto/|bins/|examples/|/tests/)
 # the host side above: it is exercised for real by the hostservice_roundtrip and
 # reverse-compat integration tests, which run an actual plugin binary against an
 # actual host. Its pure parts (mtls, handshake) stay in the unit tier.
-COVER_EXCLUDE_BOUNDARY := (penguin-ipc/src/(listen|dial)_(unix|windows)\.rs|penguin-ipc/src/groups_unix\.rs|penguin-goplugin-host/src/(client|broker|stdio|controller)\.rs|penguin-sdk/src/plugin/(serve|broker|hostservices|services|tls_incoming)\.rs)
+#
+# penguin-module-tobogganing/src/wireguard/kernel.rs is the same precedent
+# again: every method body is a netlink call (create/configure/read/remove a
+# real interface) that cannot execute without root and a real interface, and
+# mocking the netlink layer would only test the mock. It is covered for real
+# by the privileged netns gate (integration tier), not here.
+#
+# penguin-module-tobogganing/src/testutil.rs is test-only double/mock-server
+# code (`#[cfg(test)] mod testutil;` in that crate's lib.rs — it never ships
+# in the built module), the same category as the already-excluded
+# `/tests/` integration-harness directories.
+COVER_EXCLUDE_BOUNDARY := (penguin-ipc/src/(listen|dial)_(unix|windows)\.rs|penguin-ipc/src/groups_unix\.rs|penguin-goplugin-host/src/(client|broker|stdio|controller)\.rs|penguin-sdk/src/plugin/(serve|broker|hostservices|services|tls_incoming)\.rs|penguin-module-tobogganing/src/wireguard/kernel\.rs|penguin-module-tobogganing/src/testutil\.rs)
 
 COVER_IGNORE_UNIT := $(COVER_EXCLUDE_ALWAYS)|$(COVER_EXCLUDE_BOUNDARY)
 COVER_IGNORE_INT := $(COVER_EXCLUDE_ALWAYS)

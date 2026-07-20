@@ -405,4 +405,137 @@ mod tests {
     fn civil_from_days_handles_the_epoch() {
         assert_eq!(civil_from_days(0), (1970, 1, 1));
     }
+
+    fn cfg(server_url: &str) -> LicenseConfig {
+        LicenseConfig {
+            server_url: server_url.to_string(),
+            license_key: "a-license-key".to_string(),
+            user_token: String::new(),
+            validate_online: true,
+            cache_time: 1440,
+        }
+    }
+
+    /// Directly inserts a cache entry, bypassing the network — the only way
+    /// to exercise [`has_recent_valid_cache`] and [`fresh_offline_result`]
+    /// with a chosen `validated_at`/`expires_at`, since a real network round
+    /// trip always stamps both with `SystemTime::now()`.
+    fn seed_cache(
+        validator: &Validator,
+        valid: bool,
+        validated_at: SystemTime,
+        expires_at: SystemTime,
+    ) {
+        let mut state = validator.lock_state();
+        state.cache.insert(
+            CACHE_KEY.to_string(),
+            CacheEntry {
+                valid,
+                message: "seeded".to_string(),
+                validated_at,
+                expires_at,
+            },
+        );
+    }
+
+    #[test]
+    fn has_recent_valid_cache_is_false_with_no_cache_entry() {
+        let validator = Validator::new(cfg("http://127.0.0.1:1"));
+        assert!(!validator.has_recent_valid_cache());
+    }
+
+    #[test]
+    fn has_recent_valid_cache_is_false_when_the_cached_result_was_invalid() {
+        let validator = Validator::new(cfg("http://127.0.0.1:1"));
+        seed_cache(
+            &validator,
+            false,
+            SystemTime::now(),
+            SystemTime::now() + Duration::from_secs(3600),
+        );
+        assert!(!validator.has_recent_valid_cache());
+    }
+
+    #[test]
+    fn has_recent_valid_cache_is_true_when_validated_within_the_fallback_window() {
+        let validator = Validator::new(cfg("http://127.0.0.1:1"));
+        // Already-expired `expires_at`, but validated moments ago — the
+        // 24h fallback window alone must be enough.
+        seed_cache(&validator, true, SystemTime::now(), SystemTime::UNIX_EPOCH);
+        assert!(validator.has_recent_valid_cache());
+    }
+
+    #[test]
+    fn has_recent_valid_cache_is_true_when_still_within_its_own_expiry_even_if_old() {
+        let validator = Validator::new(cfg("http://127.0.0.1:1"));
+        let old = SystemTime::now() - FALLBACK_FRESHNESS - Duration::from_secs(3600);
+        seed_cache(
+            &validator,
+            true,
+            old,
+            SystemTime::now() + Duration::from_secs(3600),
+        );
+        assert!(validator.has_recent_valid_cache());
+    }
+
+    #[test]
+    fn has_recent_valid_cache_is_false_when_neither_recent_nor_still_fresh() {
+        let validator = Validator::new(cfg("http://127.0.0.1:1"));
+        let old = SystemTime::now() - FALLBACK_FRESHNESS - Duration::from_secs(3600);
+        seed_cache(&validator, true, old, SystemTime::UNIX_EPOCH);
+        assert!(!validator.has_recent_valid_cache());
+    }
+
+    #[test]
+    fn fresh_offline_result_returns_none_without_a_cache_entry() {
+        let validator = Validator::new(cfg("http://127.0.0.1:1"));
+        assert!(validator.fresh_offline_result().is_none());
+    }
+
+    #[test]
+    fn fresh_offline_result_returns_the_cached_value_within_cache_time() {
+        let mut config = cfg("http://127.0.0.1:1");
+        config.cache_time = 60;
+        let validator = Validator::new(config);
+        seed_cache(&validator, true, SystemTime::now(), SystemTime::now());
+
+        let result = validator.fresh_offline_result().expect("fresh cache hit");
+        assert!(result.valid);
+    }
+
+    #[test]
+    fn fresh_offline_result_returns_none_once_cache_time_has_elapsed() {
+        let mut config = cfg("http://127.0.0.1:1");
+        config.cache_time = 1;
+        let validator = Validator::new(config);
+        seed_cache(
+            &validator,
+            true,
+            SystemTime::now() - Duration::from_secs(120),
+            SystemTime::now(),
+        );
+        assert!(validator.fresh_offline_result().is_none());
+    }
+
+    /// Proves `validate_license`'s offline branch (lines gated by
+    /// `!config.validate_online`) actually short-circuits to the cache
+    /// instead of hitting the network — `server_url` points at a port
+    /// nothing listens on, so a network call here would fail loudly.
+    #[tokio::test]
+    async fn validate_license_offline_mode_uses_a_fresh_cache_without_touching_the_network() {
+        let mut config = cfg("http://127.0.0.1:1");
+        config.validate_online = false;
+        config.cache_time = 60;
+        let validator = Validator::new(config);
+        seed_cache(&validator, true, SystemTime::now(), SystemTime::now());
+        // Force the "already validated today" shortcut to miss, so the
+        // offline-cache branch is what's actually under test here.
+        validator.lock_state().validated_today = Some("2000-01-01".to_string());
+
+        let response = validator
+            .validate_license()
+            .await
+            .expect("a fresh offline cache must avoid the network entirely");
+        assert!(response.valid);
+    }
 }

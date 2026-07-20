@@ -269,7 +269,63 @@ answer rather than an error.
 
 **Rust:** each answer is converted using its own `name` and `type` fields.
 
-### 1.21 The HostService broker leg was dead code, and mis-TLS'd behind that (M3)
+### 1.21 The WireGuard tunnel was never actually established (M6)
+
+The tobogganing module's VPN data plane does nothing to host networking. Three
+independent gaps, each sufficient on its own:
+
+1. **`realWGController.Configure` is `return nil`.** Its comment claims
+   "wgctrl.Client doesn't have a direct Configure method" — this is false.
+   `Client.ConfigureDevice(name, cfg)` exists in the pinned version and its own
+   doc comment describes exactly this operation.
+2. **The interface is never created.** wgctrl only *configures an existing*
+   WireGuard device; every lookup path returns `ErrNotExist` when it is absent,
+   and nothing in the module ever creates one.
+3. **The client's public key is never sent to the manager.** A fresh keypair is
+   generated on every connect, but the config fetch carries only a bearer token.
+   The manager's peer table cannot learn this client's key, so no handshake is
+   possible even with (1) and (2) fixed.
+
+Around that: `Disconnect` only flips a boolean, `RotateConfig` re-fetches config
+and never re-applies it (its `force` flag is read nowhere), and `LastHandshake`
+is set once at connect time and never refreshed from the device — so the
+"handshake staleness" health check actually measures time since connect, and the
+`handshake_age_seconds` metric reports that same fiction.
+
+**Rust** implements the data plane for real on the **kernel path** (netlink):
+create the interface, configure it, read genuine handshake times and byte
+counters from the device on every read, and tear the interface down on
+disconnect.
+
+The **userspace path is not a working tunnel.** It builds a real `boringtun`
+session from the configured keys — a test proves it emits a correctly-formed
+148-byte handshake initiation entirely offline — and then returns an explicit
+`Unsupported` error, because the TUN device, UDP socket, and packet-forwarding
+loop are not wired up. That is deliberate: an honest error is the opposite of
+the Go defect this section describes, which reported success while doing
+nothing. Completing it is tracked separately.
+
+**Gap 3 is not fixable here.** Sending the client public key is a manager-API
+contract change. The Rust client sends its public key when fetching tunnel
+config, which is the correct client behaviour, but a real handshake against a
+production manager additionally requires the manager to accept and register it.
+Until then the data plane is verified against a peer we control in a network
+namespace, which proves our implementation independently of that gap.
+
+### 1.22 A restart silently disabled token refresh and health monitoring (M6)
+
+The module's stop channel is created once at construction and closed by `Stop`.
+It is never recreated, so after `Start → Stop → Start` every loop spawned by the
+second `Start` sees an already-closed channel and returns immediately. Token
+refresh and health monitoring silently never run again, with no error anywhere.
+
+Related: nothing ever reconnects. A comment on the initial connect claims
+"failures are logged and left to the monitor loop to retry", but the monitor
+loop only updates a health probe and the refresh loop only refreshes tokens —
+neither attempts a reconnect. After a failed initial connect the only recovery
+is a manual `tobogganing connect`.
+
+### 1.23 The HostService broker leg was dead code, and mis-TLS'd behind that (M3)
 
 Two stacked bugs:
 

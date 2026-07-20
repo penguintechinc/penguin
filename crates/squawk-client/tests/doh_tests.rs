@@ -148,6 +148,186 @@ async fn no_auth_header_when_token_is_unset() {
 }
 
 #[tokio::test]
+async fn empty_record_type_defaults_to_a() {
+    let server =
+        MockServer::start(vec![MockResponse::json(200, r#"{"Status":0,"Answer":[]}"#)]).await;
+
+    let client = DohClient::new(config(vec![format!("{}/dns-query", server.base_url)])).unwrap();
+    let cancel = CancellationToken::new();
+    client.query(&cancel, "example.com", "").await.unwrap();
+
+    let requests = server.requests().await;
+    assert!(requests[0].path.contains("type=A"));
+
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn max_retries_defaults_to_twice_the_configured_server_count() {
+    let one = MockServer::start(vec![MockResponse::text(500, "down")]).await;
+    let two = MockServer::start(vec![MockResponse::text(500, "down")]).await;
+
+    // Deliberately not using the `config()` helper — it always sets an
+    // explicit `max_retries`, which is exactly the value under test here.
+    let cfg = Config {
+        server_urls: vec![
+            format!("{}/dns-query", one.base_url),
+            format!("{}/dns-query", two.base_url),
+        ],
+        ..Config::default()
+    };
+    let client = DohClient::new(cfg).unwrap();
+    let cancel = CancellationToken::new();
+    let err = client.query(&cancel, "example.com", "A").await.unwrap_err();
+
+    match err {
+        squawk_client::doh::DohError::AllServersFailed { attempts, .. } => {
+            assert_eq!(attempts, 4); // 2 servers * 2, matching Go
+        }
+        other => panic!("expected AllServersFailed, got {other:?}"),
+    }
+
+    one.stop().await;
+    two.stop().await;
+}
+
+#[tokio::test]
+async fn cancelling_during_the_retry_delay_stops_immediately() {
+    let one = MockServer::start(vec![MockResponse::text(500, "down")]).await;
+    let two = MockServer::start(vec![MockResponse::text(500, "down")]).await;
+
+    let mut cfg = config(vec![
+        format!("{}/dns-query", one.base_url),
+        format!("{}/dns-query", two.base_url),
+    ]);
+    // Long enough that only cancellation — not the delay elapsing on its
+    // own — can end the wait within this test's lifetime.
+    cfg.retry_delay = 60;
+    let client = DohClient::new(cfg).unwrap();
+
+    let cancel = CancellationToken::new();
+    let canceller = cancel.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        canceller.cancel();
+    });
+
+    let started = std::time::Instant::now();
+    let err = client.query(&cancel, "example.com", "A").await.unwrap_err();
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(5),
+        "cancellation must short-circuit the 60s retry delay"
+    );
+    assert!(matches!(err, squawk_client::doh::DohError::Cancelled));
+
+    one.stop().await;
+    two.stop().await;
+}
+
+#[tokio::test]
+async fn query_with_json_parses_a_successful_response() {
+    let server = MockServer::start(vec![MockResponse::json(
+        200,
+        r#"{"Status":0,"Answer":[{"name":"example.com.","type":1,"TTL":300,"data":"192.0.2.1"}]}"#,
+    )])
+    .await;
+
+    let mut cfg = config(vec![format!("{}/dns-query", server.base_url)]);
+    cfg.auth_token = "secret-token".to_string();
+    let client = DohClient::new(cfg).unwrap();
+    let response = client.query_with_json("example.com", "A").await.unwrap();
+
+    assert_eq!(response.answer[0].data, "192.0.2.1");
+    let requests = server.requests().await;
+    assert_eq!(requests[0].method, "POST");
+    assert_eq!(
+        requests[0].header("authorization"),
+        Some("Bearer secret-token")
+    );
+
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn query_with_json_does_not_retry_across_servers() {
+    // Matches Go's `QueryWithJSON`: it queries only the current server
+    // once, unlike `query`'s round-robin failover.
+    let failing = MockServer::start(vec![MockResponse::text(500, "down")]).await;
+
+    let client = DohClient::new(config(vec![format!("{}/dns-query", failing.base_url)])).unwrap();
+    let err = client
+        .query_with_json("example.com", "A")
+        .await
+        .unwrap_err();
+
+    match err {
+        squawk_client::doh::DohError::AllServersFailed { attempts, .. } => {
+            assert_eq!(attempts, 1);
+        }
+        other => panic!("expected AllServersFailed, got {other:?}"),
+    }
+    assert_eq!(failing.call_count(), 1);
+
+    failing.stop().await;
+}
+
+#[tokio::test]
+async fn query_with_json_surfaces_an_unreachable_server_as_a_request_failure() {
+    let unreachable = MockServer::unreachable_base_url().await;
+    let client = DohClient::new(config(vec![format!("{unreachable}/dns-query")])).unwrap();
+    let err = client
+        .query_with_json("example.com", "A")
+        .await
+        .unwrap_err();
+
+    match err {
+        squawk_client::doh::DohError::AllServersFailed { attempts, errors } => {
+            assert_eq!(attempts, 1);
+            assert!(errors[0].contains("HTTP request failed"));
+        }
+        other => panic!("expected AllServersFailed, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn query_with_json_surfaces_a_non_success_status() {
+    let server = MockServer::start(vec![MockResponse::text(502, "bad gateway")]).await;
+    let client = DohClient::new(config(vec![format!("{}/dns-query", server.base_url)])).unwrap();
+    let err = client
+        .query_with_json("example.com", "A")
+        .await
+        .unwrap_err();
+
+    match err {
+        squawk_client::doh::DohError::AllServersFailed { errors, .. } => {
+            assert!(errors[0].contains("HTTP 502"));
+        }
+        other => panic!("expected AllServersFailed, got {other:?}"),
+    }
+
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn query_with_json_surfaces_a_malformed_response_body() {
+    let server = MockServer::start(vec![MockResponse::text(200, "not json")]).await;
+    let client = DohClient::new(config(vec![format!("{}/dns-query", server.base_url)])).unwrap();
+    let err = client
+        .query_with_json("example.com", "A")
+        .await
+        .unwrap_err();
+
+    match err {
+        squawk_client::doh::DohError::AllServersFailed { errors, .. } => {
+            assert!(errors[0].contains("failed to parse DNS response"));
+        }
+        other => panic!("expected AllServersFailed, got {other:?}"),
+    }
+
+    server.stop().await;
+}
+
+#[tokio::test]
 async fn nxdomain_status_is_preserved() {
     let server =
         MockServer::start(vec![MockResponse::json(200, r#"{"Status":3,"Answer":[]}"#)]).await;

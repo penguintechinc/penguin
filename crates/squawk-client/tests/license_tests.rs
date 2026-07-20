@@ -171,6 +171,41 @@ async fn get_license_info_formats_the_known_fields() {
 }
 
 #[tokio::test]
+async fn get_status_is_an_alias_for_validate_license() {
+    let server = MockServer::start(vec![MockResponse::json(
+        200,
+        r#"{"valid":true,"message":"status-ok"}"#,
+    )])
+    .await;
+
+    let validator = Validator::new(config(&server.base_url, "a-license-key", ""));
+    let status = validator.get_status().await.unwrap();
+
+    assert!(status.valid);
+    assert_eq!(status.message, "status-ok");
+
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn get_license_info_reports_invalid_and_expiry() {
+    let server = MockServer::start(vec![MockResponse::json(
+        200,
+        r#"{"valid":false,"message":"expired","expires_at":"2025-01-01"}"#,
+    )])
+    .await;
+
+    let validator = Validator::new(config(&server.base_url, "a-license-key", ""));
+    let info = validator.get_license_info().await.unwrap();
+
+    assert!(info.contains("Invalid"));
+    assert!(info.contains("expired"));
+    assert!(info.contains("License Expires: 2025-01-01"));
+
+    server.stop().await;
+}
+
+#[tokio::test]
 async fn malformed_json_surfaces_a_decode_error() {
     let server = MockServer::start(vec![MockResponse::text(200, "not json")]).await;
 

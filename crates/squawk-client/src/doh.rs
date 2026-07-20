@@ -776,8 +776,14 @@ mod tests {
     #[test]
     fn record_kind_int_maps_known_types() {
         assert_eq!(RecordKind::Int(1).as_type_str(), "A");
-        assert_eq!(RecordKind::Int(28).as_type_str(), "AAAA");
+        assert_eq!(RecordKind::Int(2).as_type_str(), "NS");
+        assert_eq!(RecordKind::Int(5).as_type_str(), "CNAME");
+        assert_eq!(RecordKind::Int(6).as_type_str(), "SOA");
+        assert_eq!(RecordKind::Int(12).as_type_str(), "PTR");
         assert_eq!(RecordKind::Int(15).as_type_str(), "MX");
+        assert_eq!(RecordKind::Int(16).as_type_str(), "TXT");
+        assert_eq!(RecordKind::Int(28).as_type_str(), "AAAA");
+        assert_eq!(RecordKind::Int(33).as_type_str(), "SRV");
         assert_eq!(RecordKind::Int(9999).as_type_str(), "TYPE9999");
     }
 
@@ -895,5 +901,172 @@ mod tests {
             normalize_server_url("https://192.0.2.1/custom-path"),
             "https://192.0.2.1/custom-path"
         );
+    }
+
+    #[test]
+    fn normalize_server_url_leaves_an_unparseable_string_unchanged() {
+        // `DohClient::new` never reaches this fallback (`validate_server_url`
+        // already rejects anything `Url::parse` can't handle first), but
+        // `normalize_server_url` is a free function tests can call directly.
+        assert_eq!(normalize_server_url("not a url"), "not a url");
+    }
+
+    #[test]
+    fn is_valid_label_rejects_an_empty_label() {
+        assert!(!is_valid_label(""));
+    }
+
+    #[test]
+    fn validate_dns_name_rejects_a_single_label_over_63_characters() {
+        let domain = format!("{}.example.com", "a".repeat(64));
+        let err = validate_dns_name(&domain).unwrap_err();
+        assert!(err.contains("too long"));
+    }
+
+    #[test]
+    fn normalize_record_type_defaults_an_empty_string_to_a() {
+        assert_eq!(normalize_record_type("").unwrap(), "A");
+    }
+
+    #[test]
+    fn new_uses_the_single_server_url_field_when_server_urls_is_empty() {
+        let config = Config {
+            server_url: "https://192.0.2.1/dns-query".to_string(),
+            ..Config::default()
+        };
+        let client = DohClient::new(config).expect("a lone server_url must be accepted");
+        assert_eq!(client.current_server(), "https://192.0.2.1/dns-query");
+    }
+
+    #[test]
+    fn new_without_any_server_url_is_an_error() {
+        let Err(err) = DohClient::new(Config::default()) else {
+            panic!("a config with no server URLs at all must be rejected");
+        };
+        assert!(matches!(err, DohError::NoServerUrls));
+    }
+
+    #[test]
+    fn set_timeout_updates_the_effective_timeout() {
+        let config = Config {
+            server_url: "https://192.0.2.1/dns-query".to_string(),
+            ..Config::default()
+        };
+        let client = DohClient::new(config).unwrap();
+        assert_eq!(client.timeout(), DEFAULT_TIMEOUT);
+
+        client.set_timeout(Duration::from_secs(5));
+        assert_eq!(client.timeout(), Duration::from_secs(5));
+    }
+
+    /// Generates a real self-signed certificate/key pair and writes each as
+    /// its own PEM file in a fresh temp directory — the mTLS/CA-cert
+    /// branches of `build_tls_config`/`build_root_store`/`load_client_identity`
+    /// parse and validate real DER, so hand-typed placeholder bytes would
+    /// only prove the parser accepts garbage, not that it does the real job.
+    fn generate_cert_and_key_files() -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf)
+    {
+        let key_pair = rcgen::KeyPair::generate().expect("generate key pair");
+        let params =
+            rcgen::CertificateParams::new(vec!["example.com".to_string()]).expect("cert params");
+        let cert = params.self_signed(&key_pair).expect("self-sign");
+
+        let dir = tempfile::tempdir().unwrap();
+        let cert_path = dir.path().join("cert.pem");
+        let key_path = dir.path().join("key.pem");
+        std::fs::write(&cert_path, cert.pem()).unwrap();
+        std::fs::write(&key_path, key_pair.serialize_pem()).unwrap();
+        (dir, cert_path, key_path)
+    }
+
+    #[test]
+    fn build_tls_config_with_verify_ssl_false_uses_the_dangerous_verifier() {
+        let config = Config {
+            verify_ssl: false,
+            ..Config::default()
+        };
+        build_tls_config(&config)
+            .expect("the insecure escape hatch must still build a usable config");
+    }
+
+    #[test]
+    fn build_tls_config_rejects_a_client_cert_without_a_matching_key() {
+        let config = Config {
+            client_cert: "/some/cert.pem".to_string(),
+            client_key: String::new(),
+            ..Config::default()
+        };
+        let err = build_tls_config(&config).unwrap_err();
+        assert!(err.contains("client_cert and client_key must both be set"));
+    }
+
+    #[test]
+    fn build_tls_config_loads_a_real_client_cert_and_key_for_mtls() {
+        let (_dir, cert_path, key_path) = generate_cert_and_key_files();
+        let config = Config {
+            client_cert: cert_path.to_str().unwrap().to_string(),
+            client_key: key_path.to_str().unwrap().to_string(),
+            ..Config::default()
+        };
+        build_tls_config(&config)
+            .expect("a real cert/key pair must build a client-auth TLS config");
+    }
+
+    #[test]
+    fn build_root_store_defaults_to_the_webpki_roots() {
+        let store = build_root_store(&Config::default()).unwrap();
+        assert!(!store.roots.is_empty());
+    }
+
+    #[test]
+    fn build_root_store_loads_a_custom_ca_cert() {
+        let (_dir, cert_path, _key_path) = generate_cert_and_key_files();
+        let config = Config {
+            ca_cert: cert_path.to_str().unwrap().to_string(),
+            ..Config::default()
+        };
+        let store = build_root_store(&config).unwrap();
+        assert_eq!(store.roots.len(), 1);
+    }
+
+    #[test]
+    fn build_root_store_errors_on_an_unreadable_ca_cert_path() {
+        let config = Config {
+            ca_cert: "/nonexistent/ca.pem".to_string(),
+            ..Config::default()
+        };
+        assert!(build_root_store(&config).is_err());
+    }
+
+    #[test]
+    fn load_client_identity_returns_the_real_chain_and_key() {
+        let (_dir, cert_path, key_path) = generate_cert_and_key_files();
+        let config = Config {
+            client_cert: cert_path.to_str().unwrap().to_string(),
+            client_key: key_path.to_str().unwrap().to_string(),
+            ..Config::default()
+        };
+        let (chain, _key) = load_client_identity(&config).expect("loads the generated identity");
+        assert_eq!(chain.len(), 1);
+    }
+
+    #[test]
+    fn dangerous_no_verifier_accepts_any_certificate() {
+        ensure_crypto_provider_installed();
+        let verifier = DangerousNoVerifier;
+        let cert = CertificateDer::from(vec![0u8; 4]);
+        let server_name = rustls::pki_types::ServerName::try_from("example.com").unwrap();
+        let result = verifier.verify_server_cert(&cert, &[], &server_name, &[], UnixTime::now());
+        assert!(
+            result.is_ok(),
+            "DangerousNoVerifier must accept any certificate — that is its documented, dangerous point"
+        );
+    }
+
+    #[test]
+    fn dangerous_no_verifier_reports_real_supported_signature_schemes() {
+        ensure_crypto_provider_installed();
+        let verifier = DangerousNoVerifier;
+        assert!(!verifier.supported_verify_schemes().is_empty());
     }
 }

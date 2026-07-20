@@ -167,6 +167,22 @@ mod tests {
     }
 
     #[test]
+    fn extract_blocks_stops_at_an_unterminated_begin_marker() {
+        // A BEGIN with no matching END must not be treated as a block —
+        // the loop breaks rather than reading past the end of the string.
+        let pem = "-----BEGIN CERTIFICATE-----\nAAAA\n";
+        let blocks = extract_blocks(pem, "CERTIFICATE").unwrap();
+        assert!(blocks.is_empty());
+    }
+
+    #[test]
+    fn extract_blocks_errors_on_malformed_base64() {
+        let pem =
+            "-----BEGIN CERTIFICATE-----\n!!!not-valid-base64!!!\n-----END CERTIFICATE-----\n";
+        assert!(extract_blocks(pem, "CERTIFICATE").is_err());
+    }
+
+    #[test]
     fn load_certificate_chain_reads_a_real_file() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("cert.pem");
@@ -180,6 +196,102 @@ mod tests {
     fn load_certificate_chain_errors_on_missing_file() {
         let err = load_certificate_chain("/nonexistent/path/does-not-exist.pem");
         assert!(err.is_err());
+    }
+
+    #[test]
+    fn load_certificate_chain_errors_when_the_file_has_no_certificate_block() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cert.pem");
+        std::fs::write(&path, "this file has no PEM blocks at all").unwrap();
+
+        let Err(err) = load_certificate_chain(path.to_str().unwrap()) else {
+            panic!("a file with no CERTIFICATE block must error");
+        };
+        assert!(matches!(err, PemError::NoBlock { .. }));
+    }
+
+    #[test]
+    fn load_certificate_chain_errors_on_malformed_base64() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cert.pem");
+        std::fs::write(
+            &path,
+            "-----BEGIN CERTIFICATE-----\n!!!not-valid-base64!!!\n-----END CERTIFICATE-----\n",
+        )
+        .unwrap();
+
+        let Err(err) = load_certificate_chain(path.to_str().unwrap()) else {
+            panic!("malformed base64 must error");
+        };
+        assert!(matches!(err, PemError::Decode { .. }));
+    }
+
+    #[test]
+    fn load_private_key_errors_on_missing_file() {
+        let err = load_private_key("/nonexistent/path/does-not-exist.pem");
+        assert!(matches!(err, Err(PemError::Read { .. })));
+    }
+
+    #[test]
+    fn load_private_key_errors_on_malformed_pkcs8_base64() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("key.pem");
+        std::fs::write(
+            &path,
+            "-----BEGIN PRIVATE KEY-----\n!!!not-valid-base64!!!\n-----END PRIVATE KEY-----\n",
+        )
+        .unwrap();
+
+        let Err(err) = load_private_key(path.to_str().unwrap()) else {
+            panic!("malformed base64 in a PRIVATE KEY block must error");
+        };
+        assert!(matches!(err, PemError::Decode { .. }));
+    }
+
+    #[test]
+    fn load_private_key_falls_back_to_pkcs1_rsa() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("key.pem");
+        std::fs::write(
+            &path,
+            fake_pem_block("RSA PRIVATE KEY", b"fake-rsa-key-bytes"),
+        )
+        .unwrap();
+
+        let key = load_private_key(path.to_str().unwrap()).unwrap();
+        assert!(matches!(key, PrivateKeyDer::Pkcs1(_)));
+    }
+
+    #[test]
+    fn load_private_key_errors_on_malformed_pkcs1_base64() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("key.pem");
+        std::fs::write(
+            &path,
+            "-----BEGIN RSA PRIVATE KEY-----\n!!!not-valid-base64!!!\n-----END RSA PRIVATE KEY-----\n",
+        )
+        .unwrap();
+
+        let Err(err) = load_private_key(path.to_str().unwrap()) else {
+            panic!("malformed base64 in an RSA PRIVATE KEY block must error");
+        };
+        assert!(matches!(err, PemError::Decode { .. }));
+    }
+
+    #[test]
+    fn load_private_key_errors_on_malformed_ec_base64() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("key.pem");
+        std::fs::write(
+            &path,
+            "-----BEGIN EC PRIVATE KEY-----\n!!!not-valid-base64!!!\n-----END EC PRIVATE KEY-----\n",
+        )
+        .unwrap();
+
+        let Err(err) = load_private_key(path.to_str().unwrap()) else {
+            panic!("malformed base64 in an EC PRIVATE KEY block must error");
+        };
+        assert!(matches!(err, PemError::Decode { .. }));
     }
 
     #[test]

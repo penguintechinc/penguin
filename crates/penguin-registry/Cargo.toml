@@ -16,3 +16,4 @@ penguin-sdk.workspace = true
 # crate lands) — referenced by path, same convention used throughout this
 # workspace for freshly-landed crates (see `bins/penguind/Cargo.toml`).
 penguin-module-squawk = { path = "../penguin-module-squawk" }
+penguin-module-tobogganing = { path = "../penguin-module-tobogganing" }

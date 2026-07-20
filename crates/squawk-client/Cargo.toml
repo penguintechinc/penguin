@@ -42,3 +42,9 @@ tokio = { workspace = true, features = ["test-util"] }
 # tests) — already in Cargo.lock transitively (rustls-platform-verifier),
 # matching penguin-licensing's dev-dependency comment.
 tempfile = "3"
+# Generates real self-signed cert/key PEM fixtures for the mTLS/CA-cert
+# branches of `doh::build_tls_config`/`build_root_store`/`load_client_identity`
+# — already a workspace dependency (penguin-sdk's go-plugin AutoMTLS tests),
+# so this adds no new crate version to the graph, only a dev-only edge to
+# one already being built.
+rcgen.workspace = true
