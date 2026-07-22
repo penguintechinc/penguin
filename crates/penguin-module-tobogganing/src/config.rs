@@ -74,7 +74,21 @@ impl Default for ModuleConfig {
             dns: Vec::new(),
             keepalive: DEFAULT_KEEPALIVE_SECS,
             allowed_ips: Vec::new(),
-            embedded: true,
+            // Deliberately `false`, unlike Go's `true`.
+            //
+            // Go declared `embedded` and never read it, so its default was
+            // inert — nothing ever selected a backend from it. This port makes
+            // the field live, which means the default now decides whether the
+            // module can connect at all. `true` selects the userspace engine,
+            // whose data plane is not wired up yet and returns an explicit
+            // Unsupported error, so shipping Go's default would leave the
+            // module unable to establish a tunnel out of the box.
+            //
+            // Defaulting to the kernel path is the only default that works.
+            // Setting `embedded: true` explicitly still selects userspace and
+            // still fails loudly, which is the honest behaviour until that
+            // path is finished.
+            embedded: false,
         }
     }
 }
@@ -120,8 +134,8 @@ pub const CONFIG_SCHEMA: &str = r#"{
     },
     "embedded": {
       "type": "boolean",
-      "description": "Use embedded userspace WireGuard",
-      "default": true
+      "description": "Use the embedded userspace WireGuard engine instead of kernel WireGuard. The userspace data plane is not implemented yet and returns an explicit error, so this defaults to false.",
+      "default": false
     }
   },
   "required": ["manager_url", "node_id"]
@@ -137,11 +151,39 @@ mod tests {
         assert_eq!(cfg.interface_name, "wg0");
         assert_eq!(cfg.mtu, 1420);
         assert_eq!(cfg.keepalive, 25);
-        assert!(cfg.embedded);
         assert!(cfg.manager_url.is_empty());
         assert!(cfg.node_id.is_empty());
         assert!(cfg.dns.is_empty());
         assert!(cfg.allowed_ips.is_empty());
+    }
+
+    /// The one default that deliberately differs from Go.
+    ///
+    /// Go defaulted `embedded` to true but never read the field, so the value
+    /// was inert. Making it live means the default now decides whether the
+    /// module can connect at all, and `true` selects the userspace engine whose
+    /// data plane is not implemented. A default that cannot establish a tunnel
+    /// is not a faithful port of anything — it is just broken.
+    #[test]
+    fn embedded_defaults_to_the_backend_that_actually_works() {
+        assert!(
+            !ModuleConfig::default().embedded,
+            "default must select the kernel backend; the userspace data plane is not implemented"
+        );
+    }
+
+    /// The advertised schema default must match what the code actually applies.
+    /// Squawk shipped a schema promising one DoH default while its code applied
+    /// another; that contradiction is worth not repeating here.
+    #[test]
+    fn schema_default_for_embedded_matches_the_code_default() {
+        let schema: serde_json::Value = serde_json::from_str(CONFIG_SCHEMA).unwrap();
+        let advertised = &schema["properties"]["embedded"]["default"];
+        assert_eq!(
+            advertised.as_bool(),
+            Some(ModuleConfig::default().embedded),
+            "schema default and code default disagree"
+        );
     }
 
     #[test]
