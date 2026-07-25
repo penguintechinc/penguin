@@ -28,6 +28,14 @@ mod module;
 #[cfg(test)]
 mod testutil;
 mod vpn;
+// Private in the shipped module — `WireGuardBackend`/`KernelBackend` are an
+// internal implementation detail of `vpn::VpnManager`. Made `pub` only under
+// `integration-test` (a cfg, not a runtime check) so `tests/wg_tunnel.rs`
+// can reach `KernelBackend` directly to prove it against a real kernel
+// tunnel; see that feature's doc in `Cargo.toml`.
+#[cfg(not(feature = "integration-test"))]
 mod wireguard;
+#[cfg(feature = "integration-test")]
+pub mod wireguard;
 
 pub use module::{TobogganingModule, factory};

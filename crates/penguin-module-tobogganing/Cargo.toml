@@ -9,6 +9,15 @@ repository.workspace = true
 [lints]
 workspace = true
 
+[features]
+# Exposes the otherwise-private `wireguard` module as `pub` so the M6 gate
+# (`tests/wg_tunnel.rs`) can drive the real `KernelBackend` directly. Off by
+# default: production code, and every consumer of this crate, only ever sees
+# `TobogganingModule`/`factory` via the crate root — see `lib.rs`. Enabled
+# explicitly by `scripts/wg-tunnel/run.sh` and the integration CI workflow,
+# never implied by plain `cargo test`.
+integration-test = []
+
 [dependencies]
 async-trait.workspace = true
 thiserror.workspace = true
@@ -65,3 +74,14 @@ tempfile = "3"
 # actually validates a module's config against this schema in production) —
 # same rationale as `penguin-module-squawk`'s identical dev-dependency.
 jsonschema.workspace = true
+
+# `required-features` makes this target invisible to every plain `cargo
+# build`/`cargo test`/`cargo clippy --all-targets` in the workspace (unit
+# gate, default lint, CI's own non-integration steps) — none of them enable
+# `integration-test`, so none of them ever need `wireguard` to be `pub` to
+# compile. Only `scripts/wg-tunnel/run.sh` and the integration workflow pass
+# `--features integration-test` and actually build/run it.
+[[test]]
+name = "wg_tunnel"
+path = "tests/wg_tunnel.rs"
+required-features = ["integration-test"]

@@ -15,6 +15,7 @@
 //! keeps every method a plain `&self` without an internal lock.
 
 use std::net::IpAddr;
+use std::time::SystemTime;
 
 use async_trait::async_trait;
 use defguard_wireguard_rs::error::WireguardInterfaceError;
@@ -101,6 +102,10 @@ impl super::WireGuardBackend for KernelBackend {
     /// for this single-peer client tunnel, only) peer's stats. An absent
     /// interface, or one with no configured peer yet, reads as
     /// [`PeerStats::default`] — "not connected", not an error.
+    ///
+    /// [`normalize_never_handshaked`] restores [`PeerStats::last_handshake`]'s
+    /// documented "`None` if it never has" contract — see that function's
+    /// doc for the `defguard_wireguard_rs` quirk it corrects for.
     async fn peer_stats(&self, interface: &str) -> Result<PeerStats, WgBackendError> {
         let api = Self::api(interface);
         let host = match api.read_interface_data() {
@@ -111,7 +116,7 @@ impl super::WireGuardBackend for KernelBackend {
             return Ok(PeerStats::default());
         };
         Ok(PeerStats {
-            last_handshake: peer.last_handshake,
+            last_handshake: normalize_never_handshaked(peer.last_handshake),
             rx_bytes: peer.rx_bytes,
             tx_bytes: peer.tx_bytes,
         })
@@ -139,4 +144,52 @@ fn configure_dns(api: &WGApi<Kernel>, dns: &[IpAddr]) -> Result<(), WgBackendErr
 
 fn map_dns_error(err: WireguardInterfaceError) -> WgBackendError {
     WgBackendError::Interface(format!("configure DNS: {err}"))
+}
+
+/// Maps `defguard_wireguard_rs`'s `Some(UNIX_EPOCH)` sentinel back to `None`.
+///
+/// The kernel's netlink reply always carries a `WGPEER_A_LAST_HANDSHAKE_TIME`
+/// attribute for every peer, using an all-zero `timespec64` as its own
+/// "never handshaked" sentinel — but `defguard_wireguard_rs::Peer::from_nlas`
+/// converts that attribute's mere presence into `Some(SystemTime::UNIX_EPOCH)`
+/// unconditionally, never `None` (confirmed by reading its source: there is
+/// no zero-check). Left uncorrected, [`PeerStats::last_handshake`]'s
+/// documented "`None` if it never has [handshaked]" contract would be false
+/// for every kernel-backed peer immediately after `apply` — exactly the case
+/// the M6 gate's anti-no-op assertion depends on being right. No real peer
+/// will ever legitimately handshake at literal UNIX epoch, so treating that
+/// one value as "never" is safe; it also matches `wg show`'s own
+/// `latest-handshakes` output, which prints `0` for this same case.
+fn normalize_never_handshaked(last_handshake: Option<SystemTime>) -> Option<SystemTime> {
+    if last_handshake == Some(SystemTime::UNIX_EPOCH) {
+        return None;
+    }
+    last_handshake
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn epoch_sentinel_normalizes_to_never_handshaked() {
+        assert_eq!(
+            normalize_never_handshaked(Some(SystemTime::UNIX_EPOCH)),
+            None
+        );
+    }
+
+    #[test]
+    fn absent_value_stays_absent() {
+        assert_eq!(normalize_never_handshaked(None), None);
+    }
+
+    #[test]
+    fn a_real_handshake_time_passes_through_unchanged() {
+        let real_handshake = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1);
+        assert_eq!(
+            normalize_never_handshaked(Some(real_handshake)),
+            Some(real_handshake)
+        );
+    }
 }
