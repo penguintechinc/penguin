@@ -28,6 +28,11 @@ penguin-licensing = { path = "../../crates/penguin-licensing" }
 # Built-in module registry (squawk, and future built-ins) — see
 # `src/daemon_main.rs`'s `SupervisorConfig::registry` wiring.
 penguin-registry = { path = "../../crates/penguin-registry" }
+# M7.2: the real self-updater `DaemonService`'s `UpdateClient` hook wires to
+# — see `src/daemon_main.rs`'s `SelfUpdateClient` adapter. Not a workspace
+# dependency yet, same per-milestone-path convention as the three crates
+# above.
+penguin-update = { path = "../../crates/penguin-update" }
 
 tokio.workspace = true
 tokio-stream.workspace = true
@@ -36,6 +41,14 @@ tonic.workspace = true
 tonic-health.workspace = true
 tracing.workspace = true
 clap.workspace = true
+# `SelfUpdateClient`'s `#[async_trait]` impl of `penguin_daemon::service::UpdateClient`.
+async-trait.workspace = true
+
+# M7.1: `penguind service <action>` — drives the systemd/launchd/SCM verbs.
+# We write our OWN hardened unit content (packaging/systemd/penguind.service,
+# embedded via include_str!) rather than the crate's generated one; see
+# workspace Cargo.toml's comment on this dependency.
+service-manager.workspace = true
 
 # Combined JSON stdout + LogRing tracing subscriber (see src/logging.rs) —
 # not a dependency of penguin-daemon itself, only of this binary's wiring.
@@ -51,3 +64,10 @@ nix.workspace = true
 # tests. Not a workspace dependency — same direct-crates.io convention
 # penguin-secrets and penguin-daemon already use for their own dev-deps.
 tempfile = "3"
+
+# Windows SCM entry point (cfg(windows)-only; see src/service/windows.rs).
+# Placed in its own target table at the end of the file so it cannot
+# accidentally swallow later keys from [dependencies]/[dev-dependencies]
+# (TOML tables extend until the next header).
+[target.'cfg(windows)'.dependencies]
+windows-service.workspace = true

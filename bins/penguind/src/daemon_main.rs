@@ -23,7 +23,7 @@ use penguin_daemon::external::{ExternalLoader, PluginDirLoader};
 use penguin_daemon::host::{DaemonHostFactory, HostFactory, SecretStoreProvider};
 use penguin_daemon::lock::{self, LockError};
 use penguin_daemon::logring::LogRing;
-use penguin_daemon::service::DaemonService;
+use penguin_daemon::service::{DaemonService, UpdateClient};
 use penguin_daemon::supervisor::{Supervisor, SupervisorConfig};
 use penguin_ipc::groups_unix::SystemGroups;
 use penguin_ipc::listen_unix::{self, ListenerConfig, PeerAuthInterceptor};
@@ -61,6 +61,42 @@ const STABILITY_WINDOW: Duration = Duration::from_secs(5 * 60);
 /// in the background. Matches the Go client's default
 /// `Options.RefreshInterval` (`go-client/internal/licensing/client.go`).
 const LICENSE_REFRESH_INTERVAL: Duration = Duration::from_secs(5 * 60);
+
+/// The GitHub repository self-updates are fetched from — matches
+/// `go-client/.goreleaser.yaml`'s `release.github.{owner,name}`.
+const RELEASE_REPO: &str = "penguintechinc/penguin";
+
+/// The minisign public key trusted to verify release archives.
+///
+/// `None` today: baking the real PenguinTech release-signing key into this
+/// binary is a deliberate, reviewed follow-up (see `docs/PARITY.md` and the
+/// M7.2 task), not something to fabricate here — a placeholder or made-up
+/// key would be strictly worse than no key at all, since it would look
+/// configured while verifying nothing real. With no key, `check_update`
+/// still works and can report a release is available (read-only, harmless),
+/// but `apply_update` fails closed with "no release verification key
+/// configured" — see [`penguin_update::UpdateError::NoVerificationKey`].
+const RELEASE_PUBLIC_KEY: Option<&str> = None;
+
+/// Adapts [`penguin_update::Updater`] to [`UpdateClient`], the trait
+/// [`DaemonService`]'s `CheckUpdate`/`ApplyUpdate` RPC handlers consult (see
+/// that trait's doc — this file's construction below used to always pass
+/// `None`). The only work this adapter does is flatten
+/// `penguin_update::UpdateError` to the trait's plain `String` error type.
+struct SelfUpdateClient {
+    updater: penguin_update::Updater,
+}
+
+#[async_trait::async_trait]
+impl UpdateClient for SelfUpdateClient {
+    async fn check_update(&self) -> Result<(bool, String), String> {
+        self.updater.check().await.map_err(|err| err.to_string())
+    }
+
+    async fn apply_update(&self) -> Result<(), String> {
+        self.updater.apply().await.map_err(|err| err.to_string())
+    }
+}
 
 /// Command-line flags for normal daemon startup. The `version`/`--version`
 /// and `service` short-circuits in [`super::main`] never reach this parser.
@@ -249,7 +285,21 @@ async fn run_daemon() -> Result<(), DaemonBinError> {
         tracing::warn!(module = %name, error = %err, "failed to restore persisted module");
     }
 
-    let daemon_service = DaemonService::new(supervisor.clone(), broker, logs, VERSION, None);
+    let update_client: Arc<dyn UpdateClient> = Arc::new(SelfUpdateClient {
+        updater: penguin_update::Updater::new(penguin_update::UpdateConfig {
+            repo: RELEASE_REPO.to_string(),
+            current_version: VERSION.to_string(),
+            binary_name: "penguind".to_string(),
+            public_key: RELEASE_PUBLIC_KEY.map(str::to_string),
+        }),
+    });
+    let daemon_service = DaemonService::new(
+        supervisor.clone(),
+        broker,
+        logs,
+        VERSION,
+        Some(update_client),
+    );
 
     let listener_cfg = ListenerConfig {
         path: PathBuf::from(&daemon_cfg.socket_path),

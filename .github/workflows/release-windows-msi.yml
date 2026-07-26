@@ -1,9 +1,14 @@
-# Release: Windows MSI
+# Release: Windows MSI (Rust build)
 #
-# On a version tag, cross-nothing — build penguind.exe + penguin.exe natively for
-# windows/amd64, package them into an MSI with WiX v5, and upload it to the GitHub
-# Release. Runs on windows-latest because WiX's MSI Bind backend P/Invokes the
-# Windows-only msi.dll and therefore cannot emit an .msi on Linux/macOS.
+# On a version tag, build penguind.exe + penguin.exe natively for
+# windows/amd64, package them into an MSI with WiX v5, and upload it to the
+# GitHub Release. Runs on windows-latest because WiX's MSI Bind backend
+# P/Invokes the Windows-only msi.dll and therefore cannot emit an .msi on
+# Linux/macOS — same constraint the Go build had.
+#
+# penguin-tray is deliberately NOT included in this MSI (matches the Go
+# reference's decision — see packaging/windows/penguind.wxs's header comment
+# for the rationale and the revisit condition).
 #
 # Actions pinned to commit SHAs per policy.
 name: Release Windows MSI
@@ -16,14 +21,24 @@ on:
 permissions:
   contents: write
 
+env:
+  # Same protoc pin/rationale as release.yml and release-tray.yml.
+  PROTOC_VERSION: '35.1'
+  PROTOC_ZIP: protoc-35.1-win64.zip
+  PROTOC_SHA256: 5d3ff218d7d91eea95f7569bcb5a98f3030f8996d44151279d9772edcff76082
+
 jobs:
   build-msi:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+
+      - name: Install Rust (matches rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master
         with:
-          go-version: '1.25'
+          toolchain: '1.97.0'
+          targets: x86_64-pc-windows-msvc
+
       - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
         with:
           dotnet-version: '8.0.x'
@@ -31,20 +46,31 @@ jobs:
       - name: Install WiX v5
         run: dotnet tool install --global wix --version 5.0.2
 
-      - name: Build Windows binaries
-        env:
-          GOOS: windows
-          GOARCH: amd64
-          CGO_ENABLED: '0'
+      - name: Install protoc ${{ env.PROTOC_VERSION }}
+        shell: bash
         run: |
-          New-Item -ItemType Directory -Force -Path staging | Out-Null
-          go build -o staging/penguind.exe ./cmd/penguind
-          go build -o staging/penguin.exe ./cmd/penguin
+          set -euo pipefail
+          curl -sSL -o protoc.zip "https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/${PROTOC_ZIP}"
+          echo "${PROTOC_SHA256}  protoc.zip" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/protoc"
+          unzip -q protoc.zip -d "$RUNNER_TEMP/protoc"
+          echo "$RUNNER_TEMP/protoc/bin" >> "$GITHUB_PATH"
+
+      - name: Build penguind + penguin (x86_64-pc-windows-msvc)
+        shell: bash
+        run: cargo build --release --locked --target x86_64-pc-windows-msvc -p penguind -p penguin
+
+      - name: Stage binaries for WiX
+        shell: bash
+        run: |
+          mkdir -p staging
+          cp target/x86_64-pc-windows-msvc/release/penguind.exe target/x86_64-pc-windows-msvc/release/penguin.exe staging/
 
       - name: Derive version from tag
         id: ver
         env:
           TAG: ${{ github.ref_name }}
+        shell: pwsh
         run: |
           $v = "$env:TAG" -replace '^v', ''
           "version=$v" >> $env:GITHUB_OUTPUT

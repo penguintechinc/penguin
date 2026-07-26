@@ -38,6 +38,12 @@ penguin-daemon = { path = "crates/penguin-daemon" }
 # resolve a builtin OR an external module through one code path.
 penguin-extplugin = { path = "crates/penguin-extplugin" }
 penguin-goplugin-host = { path = "crates/penguin-goplugin-host" }
+# waddlebot: the hub REST client + the built-in module that wraps it (module
+# and its local bridge land in the waddlebot tracks).
+waddlebot-client = { path = "crates/waddlebot-client" }
+penguin-module-waddlebot = { path = "crates/penguin-module-waddlebot" }
+# The pure tray menu model, consumed by the penguin-tray platform shells (M7.3).
+penguin-tray-model = { path = "crates/penguin-tray-model" }
 
 # gRPC / protobuf. Wire-compatibility with the Go daemon and go-plugin is the
 # whole point of the rewrite, so these are pinned exactly.
@@ -151,6 +157,37 @@ reqwest = { version = "0.13", default-features = false, features = [
     "charset",
 ] }
 webpki-roots = "1"
+
+# --- M7: service integration, self-update, packaging ---
+# OS service install/uninstall/start/stop verbs (systemd/launchd/OpenRC/SCM).
+# We drive the verbs through this but write our OWN hardened systemd unit
+# (include_str! of packaging/systemd/penguind.service), not the crate's
+# generated one — the Go build's two install paths diverged on exactly that.
+service-manager = "0.7"
+# Self-update: swap the running binary in place after minisign verification.
+# minisign-verify + reqwest are already in the graph (extplugin / license).
+self-replace = "1"
+# Release assets are tar.gz (Linux/macOS) or zip (Windows) per goreleaser's
+# name_template; the updater extracts the binary from whichever the target OS
+# ships. Go only implemented tar+gzip, silently breaking Windows updates.
+tar = "0.4"
+flate2 = "1"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+# The Windows SCM runtime: penguind.exe must implement a service entry point to
+# run under the SCM at all (WiX only registers it). cfg(windows)-only in the bin.
+windows-service = "0.8"
+
+# --- waddlebot local bridge ---
+# The dial-in bridge's loopback HTTP + WebSocket server that local integration
+# scripts connect to. No TLS feature — the listener is loopback-only and its
+# auth boundary is a per-script bearer token (TCP) or SO_PEERCRED (unix socket),
+# not certificates, so this must not drag in a second crypto stack.
+axum = { version = "0.8", default-features = false, features = [
+    "http1",
+    "json",
+    "ws",
+    "tokio",
+] }
 
 # WireGuard. The kernel path goes through netlink on Linux (and wireguard-nt on
 # Windows); boringtun is the userspace fallback for hosts without kernel

@@ -454,6 +454,271 @@ fn forwarder_detail(forwarder: &Forwarder) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testutil::{FakeHost, MockResponse, MockServer};
+    use penguin_sdk::SecretStore;
+
+    async fn init_module_with_secrets(
+        config: serde_json::Value,
+        secrets: &[(&str, &[u8])],
+    ) -> (SquawkModule, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let mut host = FakeHost::new(dir.path().to_path_buf());
+        host.config = serde_json::to_vec(&config).unwrap();
+        for (key, value) in secrets {
+            host.secrets.set(key, value).await.unwrap();
+        }
+        let module = SquawkModule::new();
+        module.init(Arc::new(host)).await.expect("init succeeds");
+        (module, dir)
+    }
+
+    async fn init_module(config: serde_json::Value) -> (SquawkModule, tempfile::TempDir) {
+        init_module_with_secrets(config, &[]).await
+    }
+
+    #[tokio::test]
+    async fn init_with_no_config_applies_every_default() {
+        let (module, _dir) = init_module(serde_json::json!({})).await;
+        assert_eq!(*module.config(), crate::config::ModuleConfig::default());
+        assert!(module.forwarder().is_none());
+    }
+
+    #[tokio::test]
+    async fn init_builds_the_forwarder_when_enabled() {
+        let (module, _dir) = init_module(serde_json::json!({
+            "forwarder": {"enabled": true, "udp_addr": "127.0.0.1:0", "tcp_addr": "127.0.0.1:0"},
+        }))
+        .await;
+        assert!(module.forwarder().is_some());
+    }
+
+    #[tokio::test]
+    async fn init_rejects_malformed_yaml_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut host = FakeHost::new(dir.path().to_path_buf());
+        host.config = b"forwarder: [unterminated".to_vec();
+        let module = SquawkModule::new();
+        let err = module
+            .init(Arc::new(host))
+            .await
+            .expect_err("malformed YAML must fail init");
+        assert!(err.to_string().contains("parse squawk config"));
+    }
+
+    #[tokio::test]
+    async fn init_rejects_a_doh_server_url_the_client_refuses() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut host = FakeHost::new(dir.path().to_path_buf());
+        host.config = serde_json::to_vec(&serde_json::json!({
+            "doh": {"server_url": "https://not-an-allowed-hostname.example.net/dns-query"},
+        }))
+        .unwrap();
+        let module = SquawkModule::new();
+        let err = module
+            .init(Arc::new(host))
+            .await
+            .expect_err("a disallowed DoH hostname must fail init");
+        assert!(err.to_string().contains("create DoH client"));
+    }
+
+    #[tokio::test]
+    async fn init_fills_a_missing_auth_token_from_secrets_and_uses_it() {
+        let doh = MockServer::start().await;
+        doh.respond(
+            "GET",
+            "/dns-query",
+            MockResponse::json(200, r#"{"Status":0,"Answer":[]}"#),
+        )
+        .await;
+        let (module, _dir) = init_module_with_secrets(
+            serde_json::json!({"doh": {"server_url": format!("{}/dns-query", doh.base_url)}}),
+            &[("auth_token", b"secret-auth-token")],
+        )
+        .await;
+
+        module
+            .dispatch(
+                &["query".to_string()],
+                &HashMap::new(),
+                &["example.com".to_string()],
+            )
+            .await
+            .expect("dispatch succeeds");
+
+        let requests = doh.requests().await;
+        assert_eq!(
+            requests[0].header("authorization"),
+            Some("Bearer secret-auth-token")
+        );
+
+        doh.stop().await;
+    }
+
+    #[tokio::test]
+    async fn start_stop_lifecycle_is_idempotent_and_updates_metrics() {
+        let (module, _dir) = init_module(serde_json::json!({
+            "forwarder": {"enabled": true, "udp_addr": "127.0.0.1:0", "tcp_addr": "127.0.0.1:0"},
+        }))
+        .await;
+
+        module.start().await.expect("start succeeds");
+        assert_eq!(module.metrics().forwarder_up.get(), 1.0);
+        // A second start while already running is a no-op, not an error.
+        module.start().await.expect("second start is a no-op");
+
+        let status = module.status().await.expect("status succeeds");
+        assert_eq!(status.state, ModuleState::Running);
+        assert_eq!(status.detail.get("server"), Some(&config_doh_url(&module)));
+        let detail = status.detail.get("forwarder").expect("forwarder detail");
+        assert!(detail.contains("listening udp"));
+        assert!(detail.contains("tcp"));
+
+        module.stop().await.expect("stop succeeds");
+        assert_eq!(module.metrics().forwarder_up.get(), 0.0);
+        // A second stop while already stopped is a no-op, not an error.
+        module.stop().await.expect("second stop is a no-op");
+
+        let status = module.status().await.expect("status succeeds");
+        assert_eq!(status.state, ModuleState::Stopped);
+    }
+
+    fn config_doh_url(module: &SquawkModule) -> String {
+        module.config().doh.server_url.clone()
+    }
+
+    #[tokio::test]
+    async fn status_without_a_forwarder_omits_the_forwarder_detail() {
+        let (module, _dir) = init_module(serde_json::json!({})).await;
+        let status = module.status().await.expect("status succeeds");
+        assert_eq!(status.state, ModuleState::Stopped);
+        assert!(!status.detail.contains_key("forwarder"));
+    }
+
+    #[tokio::test]
+    async fn health_reports_healthy_on_a_successful_probe() {
+        let doh = MockServer::start().await;
+        doh.respond(
+            "GET",
+            "/dns-query",
+            MockResponse::json(200, r#"{"Status":0,"Answer":[]}"#),
+        )
+        .await;
+        let (module, _dir) = init_module(serde_json::json!({
+            "doh": {"server_url": format!("{}/dns-query", doh.base_url)},
+        }))
+        .await;
+
+        let report = module.health().await;
+        assert_eq!(report.level, HealthLevel::Healthy);
+        assert_eq!(report.message, "OK");
+        assert_eq!(module.metrics().health_status.get(), 0.0);
+
+        doh.stop().await;
+    }
+
+    #[tokio::test]
+    async fn health_reports_degraded_when_the_probe_fails() {
+        let doh = MockServer::start().await;
+        doh.respond("GET", "/dns-query", MockResponse::json(500, "boom"))
+            .await;
+        let (module, _dir) = init_module(serde_json::json!({
+            "doh": {"server_url": format!("{}/dns-query", doh.base_url)},
+        }))
+        .await;
+
+        let report = module.health().await;
+        assert_eq!(report.level, HealthLevel::Degraded);
+
+        doh.stop().await;
+    }
+
+    #[test]
+    fn config_schema_returns_the_declared_schema() {
+        let module = SquawkModule::new();
+        let schema = module.config_schema().expect("schema present");
+        assert_eq!(schema, crate::config::CONFIG_SCHEMA.as_bytes());
+    }
+
+    #[test]
+    fn commands_declares_the_full_command_tree() {
+        let module = SquawkModule::new();
+        let names: Vec<String> = module.commands().into_iter().map(|c| c.name).collect();
+        assert!(names.iter().any(|name| name == "query"));
+        assert!(names.iter().any(|name| name == "time"));
+    }
+
+    #[tokio::test]
+    async fn forwarder_detail_reports_not_running_before_start() {
+        let doh = Arc::new(
+            squawk_client::doh::DohClient::new(squawk_client::doh::Config {
+                server_url: "https://127.0.0.1:443/dns-query".to_string(),
+                ..Default::default()
+            })
+            .unwrap(),
+        );
+        let forwarder = Forwarder::new(
+            doh,
+            squawk_client::forwarder::Config {
+                udp_address: "127.0.0.1:0".to_string(),
+                tcp_address: "127.0.0.1:0".to_string(),
+                listen_udp: true,
+                listen_tcp: true,
+            },
+            squawk_client::forwarder::CacheConfig::default(),
+        );
+        assert_eq!(forwarder_detail(&forwarder), "configured, not running");
+    }
+
+    #[tokio::test]
+    async fn forwarder_detail_reports_udp_only_when_tcp_is_disabled() {
+        let doh = Arc::new(
+            squawk_client::doh::DohClient::new(squawk_client::doh::Config {
+                server_url: "https://127.0.0.1:443/dns-query".to_string(),
+                ..Default::default()
+            })
+            .unwrap(),
+        );
+        let forwarder = Forwarder::new(
+            doh,
+            squawk_client::forwarder::Config {
+                udp_address: "127.0.0.1:0".to_string(),
+                tcp_address: "127.0.0.1:0".to_string(),
+                listen_udp: true,
+                listen_tcp: false,
+            },
+            squawk_client::forwarder::CacheConfig::default(),
+        );
+        forwarder.start().await.expect("start succeeds");
+        let detail = forwarder_detail(&forwarder);
+        assert!(detail.starts_with("listening udp"));
+        assert!(!detail.contains("tcp"));
+        forwarder.stop().await.expect("stop succeeds");
+    }
+
+    #[tokio::test]
+    async fn forwarder_detail_reports_tcp_only_when_udp_is_disabled() {
+        let doh = Arc::new(
+            squawk_client::doh::DohClient::new(squawk_client::doh::Config {
+                server_url: "https://127.0.0.1:443/dns-query".to_string(),
+                ..Default::default()
+            })
+            .unwrap(),
+        );
+        let forwarder = Forwarder::new(
+            doh,
+            squawk_client::forwarder::Config {
+                udp_address: "127.0.0.1:0".to_string(),
+                tcp_address: "127.0.0.1:0".to_string(),
+                listen_udp: false,
+                listen_tcp: true,
+            },
+            squawk_client::forwarder::CacheConfig::default(),
+        );
+        forwarder.start().await.expect("start succeeds");
+        let detail = forwarder_detail(&forwarder);
+        assert!(detail.starts_with("listening tcp"));
+        forwarder.stop().await.expect("stop succeeds");
+    }
 
     #[test]
     fn info_reports_squawk_identity_with_no_license_gate() {

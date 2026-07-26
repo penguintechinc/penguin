@@ -325,6 +325,37 @@ loop only updates a health probe and the refresh loop only refreshes tokens —
 neither attempts a reconnect. After a failed initial connect the only recovery
 is a manual `tobogganing connect`.
 
+### 1.24 Self-update was dead code that would have broken on macOS and Windows (M7)
+
+Go's `internal/update` package is never imported by any command — it's a tested
+library wired into nothing. Beyond being unreachable, its logic was broken in
+ways that would only bite in the field:
+
+- `getGOOS()`/`getGOARCH()` return the literal strings `"linux"`/`"amd64"` with a
+  comment "would be replaced with actual runtime in production" — it never was.
+- The asset match hardcodes `.tar.gz`, silently excluding every Windows `.zip`,
+  and `extract()` only implements `tar+gzip` — so a Windows update could never
+  even unpack.
+
+**Rust** detects OS/arch at runtime and maps to the release vocabulary — notably
+`"macos"` → `"darwin"`, the trap that would 404 every Mac update — matches the
+exact asset filename, extracts both `tar.gz` and `zip`, and verifies with
+minisign. With no release key configured it fails **closed** (no key baked in as
+a placeholder — that mistake was already removed once from extplugin).
+
+### 1.25 `penguind service install` wrote an unhardened unit (M7)
+
+Go ships a properly hardened systemd unit in its `.deb`/`.rpm` (NoNewPrivileges,
+ProtectSystem=strict, a tight CapabilityBoundingSet, a dedicated user, …), but
+`penguind service install` goes through kardianos/service, which **generates its
+own minimal unit** from a few config fields — so the manual-install path writes
+an *unhardened* service while the package path writes the hardened one. The two
+disagree on the security posture of the same daemon.
+
+**Rust** embeds the hardened unit and writes it verbatim on `install` (a test
+asserts every hardening directive survives), so there is one unit, hardened,
+regardless of install path.
+
 ### 1.23 The HostService broker leg was dead code, and mis-TLS'd behind that (M3)
 
 Two stacked bugs:
@@ -434,6 +465,8 @@ a trap for whoever next assumes it works.
 | systemd-resolved | the apply/restore path is a stub that **always errors**, so it silently falls through to clobbering `/etc/resolv.conf` — fighting the resolver that owns it on most modern distros | implemented for real over D-Bus (`org.freedesktop.resolve1`), with the resolv.conf path kept as the fallback it was meant to be | M5 |
 | squawk metrics | four of five are registered and **never written** (`queries_total`, `cache_entries`, `health_status`), and `forwarder_up` is not updated by the `forward start`/`stop` commands so it drifts from reality | all five actually wired to the values they claim to report | M5 |
 | Tray menu | `internal/tray/model.go` builds a model, but the shell's `onReady` only wires static Refresh/Quit — the model is largely unused | full menu model as a pure, GUI-free crate: nested `tray:true` subtrees (Go flattens), per-module load/unload, severity combining state *and* health so a `Failed` module reads urgent before a health probe lands | M4 |
+| Self-update | a library imported by nothing, hardcoding `linux`/`amd64` and unable to unpack a Windows `.zip` (§1.24) | runtime OS/arch detection, exact asset match, `tar.gz`+`zip` extraction, minisign-verified, fail-closed with no key | M7 |
+| Tray shells | `render()` only updates the tooltip; its own comment admits "a minimal static menu" (§ Tray menu) | `ksni` (Linux) and `tray-icon`+`tao` (mac/win) shells that snapshot the daemon and rebuild the full menu on every event | M7 |
 
 ### A recurring shape
 
@@ -471,3 +504,20 @@ not mistaken for parity gaps.
 | go-plugin / squawk protos | consuming milestone | Avoids accumulating generated-but-unused code |
 | Per-module const-label metric namespacing | M5 | tikv's prometheus has no `WrapRegistererWith`; no metrics consumer exists until squawk |
 | Windows IPC verification | M7 | Written and `cfg`-gated, but not compiled or exercised by Linux CI |
+
+## 5. Dependency notes
+
+### The "no ring" rule is about TLS, not the whole tree
+
+The workspace pins rustls to the **aws-lc-rs** provider because go-plugin's
+AutoMTLS presents ECDSA **P-521** certificates that `ring` cannot verify. The
+guardrail during development was "`cargo tree -i ring` must be empty" — which was
+too strong. Since M6, WireGuard's userspace engine (`boringtun`, and
+`defguard_boringtun` pulled by `defguard_wireguard_rs`) brings `ring` into the
+tree for its **Noise-protocol** crypto — a completely separate concern from TLS.
+
+The invariant that actually matters still holds: every TLS-using crate
+(`penguin-goplugin-host`, `penguin-licensing`, `waddlebot-client`, the DoH
+client) passes `cargo tree -i ring` **empty**, so rustls is aws-lc-rs everywhere
+and P-521 works. `ring`'s presence for WireGuard crypto is accepted and isolated;
+the correct check is per-TLS-crate, not workspace-wide.

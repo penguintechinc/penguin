@@ -4,7 +4,9 @@
 //! `squawk` was the first entry, proving the M1-M4 plugin framework end to
 //! end. `tobogganing` is the second — and, per `docs/PARITY.md`, the last
 //! Go-dependent module: once it is registered here, the shipped agent has
-//! no Go left in it.
+//! no Go left in it. `waddlebot` is the third: a CLI-over-API surface over
+//! the waddlebot hub (its local integration bridge is a separate, later
+//! track — see `penguin_module_waddlebot::WaddlebotModule::start_bridge`).
 
 use std::collections::BTreeMap;
 
@@ -20,6 +22,7 @@ pub fn builtin_modules() -> BTreeMap<String, Factory> {
         "tobogganing".to_string(),
         penguin_module_tobogganing::factory,
     );
+    registry.insert("waddlebot".to_string(), penguin_module_waddlebot::factory);
     registry
 }
 
@@ -62,6 +65,25 @@ mod tests {
         assert!(
             info.license_feature.is_empty(),
             "tobogganing is core product and must load with no license gate"
+        );
+    }
+
+    #[test]
+    fn waddlebot_is_registered_as_a_builtin() {
+        let registry = builtin_modules();
+        assert!(registry.contains_key("waddlebot"));
+    }
+
+    #[test]
+    fn waddlebot_factory_reports_its_own_identity_before_init() {
+        let registry = builtin_modules();
+        let factory = registry.get("waddlebot").expect("waddlebot registered");
+        let info = factory().info();
+        assert_eq!(info.name, "waddlebot");
+        assert_eq!(info.version, "1.0.0");
+        assert!(
+            info.license_feature.is_empty(),
+            "gating waddlebot behind a license entitlement is a deliberate future decision, not defaulted here"
         );
     }
 }

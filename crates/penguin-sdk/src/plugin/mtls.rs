@@ -394,6 +394,114 @@ mod tests {
     }
 
     #[test]
+    fn ensure_crypto_provider_installed_is_idempotent() {
+        // Calling this twice (here, and again inside every `generate_plugin_identity`
+        // / verifier test above and below) must never panic — the whole point
+        // of the `OnceLock` is that a second caller loses the install race
+        // harmlessly.
+        ensure_crypto_provider_installed();
+        ensure_crypto_provider_installed();
+    }
+
+    #[test]
+    fn supported_algorithms_lists_at_least_one_scheme_once_installed() {
+        ensure_crypto_provider_installed();
+        assert!(!supported_algorithms().supported_schemes().is_empty());
+    }
+
+    #[test]
+    fn read_host_cert_from_env_errors_when_the_variable_is_unset() {
+        // No test in this crate ever sets `PLUGIN_CLIENT_CERT` (doing so
+        // safely would need `unsafe { std::env::set_var }`, denied
+        // workspace-wide), so it is reliably absent here — proving the
+        // fail-closed path this function exists for.
+        let err = read_host_cert_from_env().expect_err("PLUGIN_CLIENT_CERT must be unset in CI");
+        assert!(matches!(err, PluginError::HostCert(_)));
+    }
+
+    #[test]
+    fn build_server_tls_config_pins_the_host_cert_and_requires_h2() {
+        ensure_crypto_provider_installed();
+        let identity = generate_plugin_identity().unwrap();
+        let host_identity = generate_plugin_identity().unwrap();
+        let config = build_server_tls_config(&identity, host_identity.cert_der.clone()).unwrap();
+        assert_eq!(config.alpn_protocols, vec![b"h2".to_vec()]);
+    }
+
+    #[test]
+    fn build_client_tls_config_pins_the_host_cert_and_requires_h2() {
+        ensure_crypto_provider_installed();
+        let identity = generate_plugin_identity().unwrap();
+        let host_identity = generate_plugin_identity().unwrap();
+        let config = build_client_tls_config(&identity, host_identity.cert_der.clone()).unwrap();
+        assert_eq!(config.alpn_protocols, vec![b"h2".to_vec()]);
+    }
+
+    /// Drives a real, in-memory (no sockets) rustls handshake between
+    /// [`build_server_tls_config`] and [`build_client_tls_config`], each
+    /// pinned to the other's generated identity — the same AutoMTLS pairing
+    /// `penguin-goplugin-host` performs for real over a unix socket. This is
+    /// what actually exercises `verify_server_cert`/`verify_client_cert`,
+    /// `verify_tls13_signature`, and `supported_verify_schemes` end to end,
+    /// rather than asserting on hand-built signature bytes that would only
+    /// prove the test's own math, not the verifier.
+    #[test]
+    fn server_and_client_configs_complete_a_real_mutual_tls_handshake() {
+        ensure_crypto_provider_installed();
+        let server_identity = generate_plugin_identity().unwrap();
+        let client_identity = generate_plugin_identity().unwrap();
+
+        let server_config =
+            build_server_tls_config(&server_identity, client_identity.cert_der.clone()).unwrap();
+        let client_config =
+            build_client_tls_config(&client_identity, server_identity.cert_der.clone()).unwrap();
+
+        let server_name = rustls::pki_types::ServerName::try_from(CERT_HOST)
+            .unwrap()
+            .to_owned();
+        let mut server_conn = rustls::ServerConnection::new(server_config).unwrap();
+        let mut client_conn = rustls::ClientConnection::new(client_config, server_name).unwrap();
+
+        // Pump handshake bytes between the two in-memory state machines
+        // until both sides report the handshake complete — no TCP/unix
+        // socket involved, matching this crate's "no real network in tests"
+        // rule while still driving genuine rustls verifier code.
+        for _ in 0..10 {
+            if !client_conn.is_handshaking() && !server_conn.is_handshaking() {
+                break;
+            }
+            let mut buf = Vec::new();
+            client_conn.write_tls(&mut buf).ok();
+            if !buf.is_empty() {
+                let mut cursor = std::io::Cursor::new(buf);
+                let _ = server_conn.read_tls(&mut cursor);
+                server_conn
+                    .process_new_packets()
+                    .expect("server accepts the client's handshake message");
+            }
+
+            let mut buf = Vec::new();
+            server_conn.write_tls(&mut buf).ok();
+            if !buf.is_empty() {
+                let mut cursor = std::io::Cursor::new(buf);
+                let _ = client_conn.read_tls(&mut cursor);
+                client_conn
+                    .process_new_packets()
+                    .expect("client accepts the server's handshake message");
+            }
+        }
+
+        assert!(
+            !client_conn.is_handshaking(),
+            "client must finish the handshake"
+        );
+        assert!(
+            !server_conn.is_handshaking(),
+            "server must finish the handshake"
+        );
+    }
+
+    #[test]
     fn client_verifier_accepts_only_the_pinned_der() {
         let pinned = CertificateDer::from(vec![5, 6, 7, 8]);
         let other = CertificateDer::from(vec![0, 0, 0, 0]);

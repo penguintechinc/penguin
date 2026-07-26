@@ -97,6 +97,16 @@ mod tests {
     }
 
     #[test]
+    fn print_and_flush_writes_the_line_to_stdout() {
+        // Writes to the test process's real (captured-by-cargo-test) stdout
+        // — no mock needed, and nothing this crate's "no real network/OS
+        // mutation" rule is concerned with: this is the exact call
+        // `crate::plugin::serve::serve` makes once the listener is ready.
+        let result = print_and_flush("1|1|unix|/tmp/example|grpc|");
+        assert!(result.is_ok());
+    }
+
+    #[test]
     fn build_line_cert_field_decodes_back_to_the_same_der() {
         let path = PathBuf::from("/tmp/pgp-xyz/s");
         let der = vec![9_u8, 8, 7, 6, 5, 4, 3, 2, 1, 0];

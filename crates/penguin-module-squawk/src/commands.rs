@@ -503,6 +503,488 @@ async fn handle_time(module: &SquawkModule) -> Result<CommandResult, ModuleError
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testutil::{FakeHost, MockResponse, MockServer, spawn_fake_ntp_server};
+    use penguin_sdk::{Module, SecretStore};
+    use std::sync::Arc;
+
+    /// Builds and `init()`s a fresh [`SquawkModule`] from `config`. Returns
+    /// the module's own [`tempfile::TempDir`] alongside it — the module's
+    /// resolver/marker store is rooted there for the module's lifetime, so
+    /// the directory must outlive every call the test makes.
+    async fn init_module_with_secrets(
+        config: serde_json::Value,
+        secrets: &[(&str, &[u8])],
+    ) -> (SquawkModule, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let mut host = FakeHost::new(dir.path().to_path_buf());
+        host.config = serde_json::to_vec(&config).unwrap();
+        for (key, value) in secrets {
+            host.secrets.set(key, value).await.unwrap();
+        }
+        let module = SquawkModule::new();
+        module.init(Arc::new(host)).await.expect("init succeeds");
+        (module, dir)
+    }
+
+    async fn init_module(config: serde_json::Value) -> (SquawkModule, tempfile::TempDir) {
+        init_module_with_secrets(config, &[]).await
+    }
+
+    fn json_value(result: &CommandResult) -> serde_json::Value {
+        serde_json::from_slice(&result.json).expect("command result JSON must parse")
+    }
+
+    #[tokio::test]
+    async fn dispatch_with_no_command_returns_usage() {
+        let (module, _dir) = init_module(serde_json::json!({})).await;
+        let result = dispatch(&module, &[], &HashMap::new(), &[]).await.unwrap();
+        assert_eq!(result.exit_code, 1);
+        assert_eq!(result.output, "squawk: no command specified");
+    }
+
+    #[tokio::test]
+    async fn dispatch_with_an_unknown_command_reports_it() {
+        let (module, _dir) = init_module(serde_json::json!({})).await;
+        let result = dispatch(&module, &["bogus".to_string()], &HashMap::new(), &[])
+            .await
+            .unwrap();
+        assert_eq!(result.exit_code, 1);
+        assert_eq!(result.output, "squawk: unknown command 'bogus'");
+    }
+
+    #[tokio::test]
+    async fn query_with_no_domain_argument_returns_usage() {
+        let (module, _dir) = init_module(serde_json::json!({})).await;
+        let result = dispatch(&module, &["query".to_string()], &HashMap::new(), &[])
+            .await
+            .unwrap();
+        assert_eq!(result.exit_code, 1);
+        assert_eq!(result.output, "Usage: squawk query <domain> [--type TYPE]");
+    }
+
+    #[tokio::test]
+    async fn query_success_reports_the_answer_and_increments_the_counter() {
+        let doh = MockServer::start().await;
+        doh.respond(
+            "GET",
+            "/dns-query",
+            MockResponse::json(
+                200,
+                r#"{"Status":0,"Question":[{"name":"example.com.","type":1}],"Answer":[{"name":"example.com.","type":1,"TTL":300,"data":"93.184.216.34"}]}"#,
+            ),
+        )
+        .await;
+        let (module, _dir) = init_module(serde_json::json!({
+            "doh": {"server_url": format!("{}/dns-query", doh.base_url)},
+        }))
+        .await;
+
+        let before = module.metrics().queries_total.get();
+        let result = dispatch(
+            &module,
+            &["query".to_string()],
+            &HashMap::new(),
+            &["example.com".to_string()],
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.output, "example.com A: 1 answer(s)");
+        let json = json_value(&result);
+        assert_eq!(json["domain"], "example.com");
+        assert_eq!(json["record_type"], "A");
+        assert_eq!(module.metrics().queries_total.get(), before + 1.0);
+
+        doh.stop().await;
+    }
+
+    #[tokio::test]
+    async fn query_honors_an_explicit_type_flag() {
+        let doh = MockServer::start().await;
+        doh.respond(
+            "GET",
+            "/dns-query",
+            MockResponse::json(200, r#"{"Status":0,"Answer":[]}"#),
+        )
+        .await;
+        let (module, _dir) = init_module(serde_json::json!({
+            "doh": {"server_url": format!("{}/dns-query", doh.base_url)},
+        }))
+        .await;
+
+        let mut flags = HashMap::new();
+        flags.insert("type".to_string(), "MX".to_string());
+        let result = dispatch(
+            &module,
+            &["query".to_string()],
+            &flags,
+            &["example.com".to_string()],
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.output, "example.com MX: 0 answer(s)");
+        let requests = doh.requests().await;
+        assert!(requests[0].path.contains("type=MX"));
+
+        doh.stop().await;
+    }
+
+    #[tokio::test]
+    async fn query_reports_a_failure_from_every_upstream_server() {
+        let doh = MockServer::start().await;
+        doh.respond("GET", "/dns-query", MockResponse::json(500, "oops"))
+            .await;
+        let (module, _dir) = init_module(serde_json::json!({
+            "doh": {"server_url": format!("{}/dns-query", doh.base_url)},
+        }))
+        .await;
+
+        let result = dispatch(
+            &module,
+            &["query".to_string()],
+            &HashMap::new(),
+            &["example.com".to_string()],
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result.exit_code, 1);
+        assert!(result.output.starts_with("Query failed:"));
+
+        doh.stop().await;
+    }
+
+    #[tokio::test]
+    async fn forward_with_no_subcommand_returns_usage() {
+        let (module, _dir) = init_module(serde_json::json!({})).await;
+        let result = dispatch(&module, &["forward".to_string()], &HashMap::new(), &[])
+            .await
+            .unwrap();
+        assert_eq!(result.exit_code, 1);
+        assert_eq!(result.output, "Usage: squawk forward {status|start|stop}");
+    }
+
+    #[tokio::test]
+    async fn forward_rejects_an_unknown_subcommand() {
+        let (module, _dir) = init_module(serde_json::json!({})).await;
+        let result = dispatch(
+            &module,
+            &["forward".to_string(), "bogus".to_string()],
+            &HashMap::new(),
+            &[],
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.exit_code, 1);
+        assert_eq!(result.output, "Unknown subcommand: bogus");
+    }
+
+    #[tokio::test]
+    async fn forward_status_without_a_configured_forwarder_says_so() {
+        let (module, _dir) = init_module(serde_json::json!({})).await;
+        let result = dispatch(
+            &module,
+            &["forward".to_string(), "status".to_string()],
+            &HashMap::new(),
+            &[],
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.exit_code, 1);
+        assert_eq!(result.output, "Forwarder not configured");
+    }
+
+    fn forwarder_config() -> serde_json::Value {
+        serde_json::json!({
+            "forwarder": {"enabled": true, "udp_addr": "127.0.0.1:0", "tcp_addr": "127.0.0.1:0"},
+        })
+    }
+
+    #[tokio::test]
+    async fn forward_lifecycle_reports_status_and_updates_the_metric() {
+        let (module, _dir) = init_module(forwarder_config()).await;
+
+        let status = dispatch(
+            &module,
+            &["forward".to_string(), "status".to_string()],
+            &HashMap::new(),
+            &[],
+        )
+        .await
+        .unwrap();
+        assert_eq!(status.output, "Forwarder: stopped");
+
+        let start = dispatch(
+            &module,
+            &["forward".to_string(), "start".to_string()],
+            &HashMap::new(),
+            &[],
+        )
+        .await
+        .unwrap();
+        assert_eq!(start.exit_code, 0);
+        assert_eq!(start.output, "Forwarder started");
+        assert_eq!(module.metrics().forwarder_up.get(), 1.0);
+
+        let status = dispatch(
+            &module,
+            &["forward".to_string(), "status".to_string()],
+            &HashMap::new(),
+            &[],
+        )
+        .await
+        .unwrap();
+        assert_eq!(status.output, "Forwarder: running");
+
+        // A second start while already running fails without crashing.
+        let start_again = dispatch(
+            &module,
+            &["forward".to_string(), "start".to_string()],
+            &HashMap::new(),
+            &[],
+        )
+        .await
+        .unwrap();
+        assert_eq!(start_again.exit_code, 1);
+        assert!(start_again.output.starts_with("Failed to start forwarder:"));
+
+        let stop = dispatch(
+            &module,
+            &["forward".to_string(), "stop".to_string()],
+            &HashMap::new(),
+            &[],
+        )
+        .await
+        .unwrap();
+        assert_eq!(stop.exit_code, 0);
+        assert_eq!(stop.output, "Forwarder stopped");
+        assert_eq!(module.metrics().forwarder_up.get(), 0.0);
+
+        // A second stop while already stopped fails without crashing.
+        let stop_again = dispatch(
+            &module,
+            &["forward".to_string(), "stop".to_string()],
+            &HashMap::new(),
+            &[],
+        )
+        .await
+        .unwrap();
+        assert_eq!(stop_again.exit_code, 1);
+        assert!(stop_again.output.starts_with("Failed to stop forwarder:"));
+    }
+
+    #[tokio::test]
+    async fn config_command_masks_every_credential_field() {
+        let (module, _dir) = init_module(serde_json::json!({
+            "doh": {"auth_token": "supersecretauthtoken"},
+            "license": {
+                "license_key": "supersecretlicensekey",
+                "user_token": "supersecretusertoken",
+            },
+        }))
+        .await;
+
+        let result = dispatch(&module, &["config".to_string()], &HashMap::new(), &[])
+            .await
+            .unwrap();
+        assert_eq!(result.exit_code, 0);
+        let json = json_value(&result);
+        assert_eq!(json["doh"]["auth_token"], "****oken");
+        assert_eq!(json["license"]["license_key"], "****ekey");
+        assert_eq!(json["license"]["user_token"], "****oken");
+        // Non-secret fields survive untouched.
+        assert!(
+            json["doh"]["server_url"]
+                .as_str()
+                .unwrap()
+                .contains("127.0.0.1")
+        );
+    }
+
+    #[tokio::test]
+    async fn cache_with_no_subcommand_returns_usage() {
+        let (module, _dir) = init_module(forwarder_config()).await;
+        let result = dispatch(&module, &["cache".to_string()], &HashMap::new(), &[])
+            .await
+            .unwrap();
+        assert_eq!(result.exit_code, 1);
+        assert_eq!(result.output, "Usage: squawk cache {stats|flush}");
+    }
+
+    #[tokio::test]
+    async fn cache_rejects_an_unknown_subcommand() {
+        let (module, _dir) = init_module(forwarder_config()).await;
+        let result = dispatch(
+            &module,
+            &["cache".to_string(), "bogus".to_string()],
+            &HashMap::new(),
+            &[],
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.exit_code, 1);
+        assert_eq!(result.output, "Unknown subcommand: bogus");
+    }
+
+    #[tokio::test]
+    async fn cache_without_a_configured_forwarder_is_unavailable() {
+        let (module, _dir) = init_module(serde_json::json!({})).await;
+        let result = dispatch(
+            &module,
+            &["cache".to_string(), "stats".to_string()],
+            &HashMap::new(),
+            &[],
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.exit_code, 1);
+        assert_eq!(result.output, "Forwarder not configured; cache unavailable");
+    }
+
+    #[tokio::test]
+    async fn cache_stats_and_flush_reflect_a_fresh_cache() {
+        let (module, _dir) = init_module(forwarder_config()).await;
+
+        let stats = dispatch(
+            &module,
+            &["cache".to_string(), "stats".to_string()],
+            &HashMap::new(),
+            &[],
+        )
+        .await
+        .unwrap();
+        assert_eq!(stats.exit_code, 0);
+        assert_eq!(stats.output, "Cache: 0 entries, 0 hits, 0 misses");
+
+        let flush = dispatch(
+            &module,
+            &["cache".to_string(), "flush".to_string()],
+            &HashMap::new(),
+            &[],
+        )
+        .await
+        .unwrap();
+        assert_eq!(flush.exit_code, 0);
+        assert_eq!(flush.output, "Cache flushed");
+        assert_eq!(flush.json, br#"{"status":"flushed"}"#);
+    }
+
+    #[tokio::test]
+    async fn license_reports_valid_from_a_configured_license_key() {
+        let license = MockServer::start().await;
+        license
+            .respond(
+                "POST",
+                "/api/validate",
+                MockResponse::json(200, r#"{"valid":true,"message":"ok"}"#),
+            )
+            .await;
+        let (module, _dir) = init_module(serde_json::json!({
+            "license": {"server_url": license.base_url, "license_key": "a-key"},
+        }))
+        .await;
+
+        let result = dispatch(&module, &["license".to_string()], &HashMap::new(), &[])
+            .await
+            .unwrap();
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.output, "License status: valid");
+        let json = json_value(&result);
+        assert_eq!(json["valid"], true);
+
+        license.stop().await;
+    }
+
+    #[tokio::test]
+    async fn license_reports_invalid_without_failing_the_command() {
+        let license = MockServer::start().await;
+        license
+            .respond(
+                "POST",
+                "/api/validate",
+                MockResponse::json(200, r#"{"valid":false,"message":"expired"}"#),
+            )
+            .await;
+        let (module, _dir) = init_module(serde_json::json!({
+            "license": {"server_url": license.base_url, "license_key": "a-key"},
+        }))
+        .await;
+
+        let result = dispatch(&module, &["license".to_string()], &HashMap::new(), &[])
+            .await
+            .unwrap();
+        assert_eq!(result.exit_code, 1);
+        assert_eq!(result.output, "License status: invalid or expired");
+
+        license.stop().await;
+    }
+
+    #[tokio::test]
+    async fn license_reports_an_error_when_the_server_is_unreachable() {
+        let unreachable = MockServer::unreachable_base_url().await;
+        let (module, _dir) = init_module(serde_json::json!({
+            "license": {"server_url": unreachable, "license_key": "a-key"},
+        }))
+        .await;
+
+        let result = dispatch(&module, &["license".to_string()], &HashMap::new(), &[])
+            .await
+            .unwrap();
+        assert_eq!(result.exit_code, 1);
+        assert!(result.output.starts_with("License status: error:"));
+    }
+
+    #[tokio::test]
+    async fn license_falls_back_to_a_user_token_from_secrets() {
+        let license = MockServer::start().await;
+        license
+            .respond(
+                "POST",
+                "/api/validate_token",
+                MockResponse::json(200, r#"{"valid":true}"#),
+            )
+            .await;
+        let (module, _dir) = init_module_with_secrets(
+            serde_json::json!({"license": {"server_url": license.base_url}}),
+            &[("user_token", b"secret-token")],
+        )
+        .await;
+
+        let result = dispatch(&module, &["license".to_string()], &HashMap::new(), &[])
+            .await
+            .unwrap();
+        assert_eq!(result.exit_code, 0);
+        let requests = license.requests().await;
+        assert_eq!(requests[0].method, "POST");
+        assert_eq!(requests[0].path, "/api/validate_token");
+        assert_eq!(
+            requests[0].header("authorization"),
+            Some("Bearer secret-token")
+        );
+
+        license.stop().await;
+    }
+
+    #[tokio::test]
+    async fn time_reports_a_synchronized_offset_from_a_real_ntp_round_trip() {
+        let addr = spawn_fake_ntp_server().await;
+        let (module, _dir) = init_module(serde_json::json!({
+            "ntp": {"server_urls": [addr.to_string()]},
+        }))
+        .await;
+
+        let result = dispatch(&module, &["time".to_string()], &HashMap::new(), &[])
+            .await
+            .unwrap();
+        assert_eq!(result.exit_code, 0);
+        assert!(result.output.starts_with("NTP: synchronized"));
+        let json = json_value(&result);
+        assert_eq!(json["synchronized"], true);
+        assert_eq!(json["stratum"], 2);
+    }
 
     #[test]
     fn command_tree_declares_every_top_level_command() {

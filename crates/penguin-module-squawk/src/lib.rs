@@ -15,5 +15,7 @@ mod mask;
 mod metrics;
 mod module;
 pub mod sysresolver;
+#[cfg(test)]
+mod testutil;
 
 pub use module::{SquawkModule, factory};

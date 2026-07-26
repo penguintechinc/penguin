@@ -10,3 +10,63 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+# The pure, already-tested menu model this binary renders — see that
+# crate's own doc for why the model/shell split exists. Not a workspace
+# dependency yet (root Cargo.toml is being edited concurrently elsewhere, so
+# this file adds it directly rather than touching that manifest) —
+# referenced by path, the same convention `bins/penguind/Cargo.toml` already
+# uses for its own not-yet-workspace crates (penguin-secrets,
+# penguin-licensing, penguin-registry, penguin-update).
+penguin-tray-model = { path = "../../crates/penguin-tray-model" }
+# The same authenticated local transport the CLI dials.
+penguin-ipc.workspace = true
+# The daemon's gRPC contract (ListModules/GetStatus/ListCommands/Dispatch/
+# WatchEvents/...).
+penguin-proto.workspace = true
+# `penguin_tray_model::ModuleInput` is expressed in terms of
+# `penguin_sdk::{ModuleState, HealthLevel, CommandSpec, FlagSpec, FlagType}`
+# (see `crates/penguin-tray-model/src/module.rs`) — this binary must name
+# those types directly to construct a `ModuleInput`, so it needs the crate
+# itself, not just a transitive dependency of penguin-tray-model. Already a
+# workspace dependency (used throughout the daemon/CLI side), so this adds
+# no new dependency to the graph.
+penguin-sdk.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+# `DaemonClient<Channel>` and the `Status`/`Streaming` types the daemon loop
+# matches on.
+tonic.workspace = true
+# `ConnectError`'s variants.
+thiserror.workspace = true
+
+# Linux tray shell: renders the model as a KDE/freedesktop StatusNotifierItem
+# over D-Bus. Needs no OS main thread (runs inside a Tokio task), so it is
+# the only platform shell this workspace's Linux CI actually builds and
+# tests — see `src/tray_linux.rs`.
+[target.'cfg(target_os = "linux")'.dependencies]
+ksni = "0.3"
+
+# macOS/Windows tray shell: `tray-icon` (+ its own re-export of `muda` for
+# menu construction) driven by a `tao` event loop on the OS main thread. Not
+# built by this workspace's Linux CI — see `src/tray_native.rs`'s module doc
+# for the required main-thread/Tokio thread split.
+#
+# Versions: `tray-icon` pinned to the newest 0.24.x (0.24.1) available at
+# time of writing. `tao` pinned to 0.30 (the version this task's brief
+# suggested); a newer 0.35.x line also exists on crates.io but nothing here
+# requires it, and 0.30 resolves cleanly. `muda` is deliberately NOT a
+# direct dependency: `tray_icon::menu` is `tray-icon`'s own re-export of the
+# exact `muda` version it was built against (`^0.19.1`, not the brief's
+# suggested 0.15 — that version predates tray-icon 0.24's requirement), so
+# depending on `muda` directly here would either duplicate it in the graph
+# at a mismatched version or fight Cargo's unification; using
+# `tray_icon::menu::*` avoids the problem entirely.
+[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
+tray-icon = "0.24"
+tao = "0.30"
+
+[dev-dependencies]
+# Test-only scratch socket paths for `connection`'s own dial test — same
+# direct-crates.io convention `penguin-ipc` and every other crate in this
+# workspace already uses for this exact purpose.
+tempfile = "3"

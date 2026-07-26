@@ -49,7 +49,27 @@ COVER_EXCLUDE_ALWAYS := (crates/penguin-proto/|bins/|examples/|/tests/)
 # code (`#[cfg(test)] mod testutil;` in that crate's lib.rs — it never ships
 # in the built module), the same category as the already-excluded
 # `/tests/` integration-harness directories.
-COVER_EXCLUDE_BOUNDARY := (penguin-ipc/src/(listen|dial)_(unix|windows)\.rs|penguin-ipc/src/groups_unix\.rs|penguin-goplugin-host/src/(client|broker|stdio|controller)\.rs|penguin-sdk/src/plugin/(serve|broker|hostservices|services|tls_incoming)\.rs|penguin-module-tobogganing/src/wireguard/kernel\.rs|penguin-module-tobogganing/src/testutil\.rs)
+#
+# penguin-secrets/src/platform_backend.rs is the OS keyring adapter (Windows
+# Credential Manager, macOS Keychain, Linux Secret Service via the `keyring`
+# crate). Every public method either constructs a `keyring::Entry` or drives
+# one through `spawn_blocking` — there is no real desktop keyring in CI, and
+# exercising one here would mean either a real credential prompt (forbidden)
+# or mocking the `keyring` crate itself, which would only test the mock.
+# `Backend::FileOnly` is the only backend any test in this crate selects.
+#
+# penguin-update/src/updater.rs is the network-fetch + archive-download +
+# `self_replace` orchestration boundary — GitHub release fetch, asset
+# download, and swapping the running executable's own binary out from under
+# it. None of that can run in CI (no network, and self-replacing the test
+# binary mid-suite is exactly the kind of host mutation these gates forbid).
+# Its pure decisions — OS/arch mapping, asset selection, archive extraction,
+# minisign verification — are factored out into
+# penguin-update/src/{platform,release,archive,verify}.rs, which stay in the
+# unit tier and are fully tested there. The one pure branch left in
+# updater.rs itself (apply()'s no-verification-key fail-closed short-circuit,
+# which runs before any network call) is still unit-tested in this file.
+COVER_EXCLUDE_BOUNDARY := (penguin-ipc/src/(listen|dial)_(unix|windows)\.rs|penguin-ipc/src/groups_unix\.rs|penguin-goplugin-host/src/(client|broker|stdio|controller)\.rs|penguin-sdk/src/plugin/(serve|broker|hostservices|services|tls_incoming)\.rs|penguin-module-tobogganing/src/wireguard/kernel\.rs|penguin-module-tobogganing/src/testutil\.rs|penguin-secrets/src/platform_backend\.rs|penguin-update/src/updater\.rs)
 
 COVER_IGNORE_UNIT := $(COVER_EXCLUDE_ALWAYS)|$(COVER_EXCLUDE_BOUNDARY)
 COVER_IGNORE_INT := $(COVER_EXCLUDE_ALWAYS)

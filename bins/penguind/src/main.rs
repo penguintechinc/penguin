@@ -9,6 +9,7 @@ mod daemon_main;
 mod host_wiring;
 #[cfg(unix)]
 mod logging;
+mod service;
 
 use std::process::ExitCode;
 
@@ -32,11 +33,22 @@ fn main() -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
-    if is_service_request(&args) {
-        eprintln!(
-            "penguind: `service` install/uninstall/start/stop/status is not implemented yet (lands in M7)"
-        );
-        return ExitCode::FAILURE;
+    // Handle `service` subcommands (install, uninstall, start, stop,
+    // status). These must run BEFORE loading config or acquiring locks —
+    // mirrors `go-client/cmd/penguind/main.go`'s `run()`, which checks
+    // `handleServiceCommand`'s `handled` bool the same way.
+    let host = service::real_host();
+    if let Some(result) = service::handle_service_command(&args, &host) {
+        return match result {
+            Ok(line) => {
+                println!("{line}");
+                ExitCode::SUCCESS
+            }
+            Err(message) => {
+                eprintln!("penguind: {message}");
+                ExitCode::FAILURE
+            }
+        };
     }
 
     run()
@@ -47,12 +59,6 @@ fn main() -> ExitCode {
 /// setup.
 fn is_version_request(args: &[String]) -> bool {
     args.len() == 1 && (args[0] == "version" || args[0] == "--version")
-}
-
-/// True when the first argument is the (not-yet-implemented) `service`
-/// subcommand.
-fn is_service_request(args: &[String]) -> bool {
-    args.first().is_some_and(|first| first == "service")
 }
 
 /// Runs the real daemon. Unix-only for now — see `daemon_main`'s module doc.
@@ -87,16 +93,5 @@ mod tests {
             "--config-dir".to_string(),
             "/etc/penguin".to_string()
         ]));
-    }
-
-    #[test]
-    fn service_request_matches_only_a_leading_service_token() {
-        assert!(is_service_request(&["service".to_string()]));
-        assert!(is_service_request(&[
-            "service".to_string(),
-            "install".to_string()
-        ]));
-        assert!(!is_service_request(&[]));
-        assert!(!is_service_request(&["version".to_string()]));
     }
 }
