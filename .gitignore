@@ -28,3 +28,7 @@ credentials.json
 # Local crash-recovery state
 .PLAN
 .TODO
+
+# Parallel-work git worktrees (this repo's checkout is shared with other
+# sessions; the migration work runs in an isolated worktree here)
+/.worktrees/
