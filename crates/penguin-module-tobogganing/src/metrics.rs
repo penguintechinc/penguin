@@ -13,12 +13,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use penguin_sdk::{Metrics, MetricsError};
 use prometheus::{Counter, Gauge, Opts};
 
-/// Namespace/subsystem shared by every collector — matches the Go module's
-/// `prometheus.GaugeOpts`/`CounterOpts{Name: "tobogganing_..."}` naming
-/// exactly via the namespace/subsystem/name split this workspace's metrics
-/// convention uses (see `penguin-module-squawk::metrics` for the same
-/// pattern), so the fully-qualified names stay
-/// `penguin_module_tobogganing_tobogganing_*`.
+/// Namespace/subsystem shared by every collector. Prometheus combines
+/// namespace + subsystem + name into fully-qualified metric names:
+/// `penguin_module_tobogganing_tunnel_up`, etc. This single-form scheme maps
+/// 1:1 to Go's bare-name scheme (`tobogganing_tunnel_up`) via the waived
+/// prefix-vs-label divergence (PARITY §2.8): Go adds a `module=tobogganing`
+/// const-label; Rust uses the namespace/subsystem split.
 const NAMESPACE: &str = "penguin_module";
 const SUBSYSTEM: &str = "tobogganing";
 
@@ -29,7 +29,7 @@ pub struct TobogganingMetrics {
     pub rx_bytes: Counter,
     pub tx_bytes: Counter,
     pub token_refreshes: Counter,
-    pub conn_errors: Counter,
+    pub connection_errors: Counter,
     /// The device's own cumulative rx counter as of the last
     /// [`record_bytes`](Self::record_bytes) call, so repeated reads of the
     /// same absolute value (a `Counter` only ever moves forward) turn into
@@ -40,44 +40,39 @@ pub struct TobogganingMetrics {
 }
 
 impl TobogganingMetrics {
-    /// Builds all six collectors and registers each with `registerer`,
-    /// preserving the exact metric names the Go module used.
+    /// Builds all six collectors and registers each with `registerer`.
+    /// Bare metric names are combined with namespace and subsystem into
+    /// fully-qualified names like `penguin_module_tobogganing_tunnel_up`.
     pub fn register(registerer: &dyn Metrics) -> Result<TobogganingMetrics, MetricsError> {
         let tunnel_up = new_gauge(
-            "tobogganing_tunnel_up",
+            "tunnel_up",
             "Whether the WireGuard tunnel is up (1=up, 0=down)",
         )?;
         registerer.register(Box::new(tunnel_up.clone()))?;
 
         let handshake_age = new_gauge(
-            "tobogganing_handshake_age_seconds",
+            "handshake_age_seconds",
             "Age of the last WireGuard handshake in seconds",
         )?;
         registerer.register(Box::new(handshake_age.clone()))?;
 
-        let rx_bytes = new_counter(
-            "tobogganing_rx_bytes_total",
-            "Total bytes received on the tunnel",
-        )?;
+        let rx_bytes = new_counter("rx_bytes_total", "Total bytes received on the tunnel")?;
         registerer.register(Box::new(rx_bytes.clone()))?;
 
-        let tx_bytes = new_counter(
-            "tobogganing_tx_bytes_total",
-            "Total bytes transmitted on the tunnel",
-        )?;
+        let tx_bytes = new_counter("tx_bytes_total", "Total bytes transmitted on the tunnel")?;
         registerer.register(Box::new(tx_bytes.clone()))?;
 
         let token_refreshes = new_counter(
-            "tobogganing_token_refreshes_total",
+            "token_refreshes_total",
             "Total number of token refresh operations",
         )?;
         registerer.register(Box::new(token_refreshes.clone()))?;
 
-        let conn_errors = new_counter(
-            "tobogganing_connection_errors_total",
+        let connection_errors = new_counter(
+            "connection_errors_total",
             "Total number of connection errors",
         )?;
-        registerer.register(Box::new(conn_errors.clone()))?;
+        registerer.register(Box::new(connection_errors.clone()))?;
 
         Ok(TobogganingMetrics {
             tunnel_up,
@@ -85,7 +80,7 @@ impl TobogganingMetrics {
             rx_bytes,
             tx_bytes,
             token_refreshes,
-            conn_errors,
+            connection_errors,
             last_rx_bytes: AtomicU64::new(0),
             last_tx_bytes: AtomicU64::new(0),
         })
@@ -171,12 +166,12 @@ mod tests {
 
         let names = reg.names.lock().unwrap().clone();
         let expected = [
-            "penguin_module_tobogganing_tobogganing_tunnel_up",
-            "penguin_module_tobogganing_tobogganing_handshake_age_seconds",
-            "penguin_module_tobogganing_tobogganing_rx_bytes_total",
-            "penguin_module_tobogganing_tobogganing_tx_bytes_total",
-            "penguin_module_tobogganing_tobogganing_token_refreshes_total",
-            "penguin_module_tobogganing_tobogganing_connection_errors_total",
+            "penguin_module_tobogganing_tunnel_up",
+            "penguin_module_tobogganing_handshake_age_seconds",
+            "penguin_module_tobogganing_rx_bytes_total",
+            "penguin_module_tobogganing_tx_bytes_total",
+            "penguin_module_tobogganing_token_refreshes_total",
+            "penguin_module_tobogganing_connection_errors_total",
         ];
         for name in expected {
             assert!(names.contains(&name.to_string()), "missing {name}");

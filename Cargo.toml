@@ -42,6 +42,9 @@ penguin-goplugin-host = { path = "crates/penguin-goplugin-host" }
 # and its local bridge land in the waddlebot tracks).
 waddlebot-client = { path = "crates/waddlebot-client" }
 penguin-module-waddlebot = { path = "crates/penguin-module-waddlebot" }
+# Built-in modules for M6+ (squawk, tobogganing — Go porting milestones).
+penguin-module-squawk = { path = "crates/penguin-module-squawk" }
+penguin-module-tobogganing = { path = "crates/penguin-module-tobogganing" }
 # The pure tray menu model, consumed by the penguin-tray platform shells (M7.3).
 penguin-tray-model = { path = "crates/penguin-tray-model" }
 
@@ -125,6 +128,11 @@ sha2 = "0.10"
 tokio-tungstenite = { version = "0.29", default-features = false, features = ["connect"] }
 # Async stream utilities for obs-adapter's WebSocket message loop (StreamExt trait).
 futures-util = "0.3"
+# URL parser for the obs-adapter's loopback-only guard. A substring match on the
+# raw URL string is unsafe (`ws://127.0.0.1.evil.com` contains "127.0.0.1"); this
+# parses the authority so the HOST is checked against IpAddr::is_loopback / the
+# literal "localhost". Already in the lock via tokio-tungstenite, so no new graph.
+url = "2"
 # Bridges tokio's AsyncRead/AsyncWrite to hyper's own Read/Write traits.
 # Required for penguin-goplugin-host's custom TLS-over-unix-socket gRPC
 # connector: tonic's `Endpoint::connect_with_connector` requires the hyper

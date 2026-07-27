@@ -392,6 +392,21 @@ binary finds only a plaintext listener on broker id 1, fails the TLS handshake
 fast, and falls back to a no-op `HostServices` without hanging — which is what
 makes it a valid reverse-compatibility fixture as well.
 
+### 1.26 Squawk's `config`/`license` shed a phantom two-word subcommand (M5)
+
+Go's squawk module declared its `config` and `license` commands with a two-word
+usage — `config show`, `license status` — plus an optional positional (max args
+1). But **neither implementation ever routed on the second word**: bare `config`
+and `config show` did the same thing, and the trailing argument was never read.
+Rust collapses each to the bare command name (`use=config`/`use=license`, max
+args 0), dropping a subcommand level that only ever added confusion. Authority:
+the `crates/penguin-module-squawk/src/commands.rs` module doc.
+
+This is the one deliberate Rust↔Go difference in the M8 CLI-tree structural diff.
+The parity gate waives exactly it (`scripts/parity/cli-tree.sh` `waive_squawk_tree`,
+addressed to those two lines) and still fails on any *other* tree divergence, so
+the waiver cannot mask a real regression elsewhere.
+
 ---
 
 ## 2. Bug-compatible — Go is odd, Rust reproduces it anyway
@@ -438,7 +453,9 @@ hardened, so both platforms behave as documented.
 The Go CLI formats `penguin logs` timestamps in the host's local timezone. Rust
 renders UTC, because matching local time means either a timezone-database
 dependency or libc `localtime_r` plumbing, and neither is worth it for a log
-tail. Cosmetic and user-visible; revisit at M8 if it grates.
+tail. Cosmetic and user-visible. **M8: kept as-is (waived)** — UTC is the more
+portable choice for a daemon log tail and is what the CLI-parity harness
+normalises; a timezone-database dependency is not worth it.
 
 ### 2.7 The embedded publisher key is malformed (M3)
 
@@ -446,9 +463,47 @@ Go's `embeddedPublicKey` decodes to 41 bytes; a valid minisign key is 42. The
 constant is an unfilled placeholder and can never verify anything — the real
 mechanism is the pinned keys in `/etc/penguin/trusted-publishers.d`.
 
-Ported verbatim and inert, with a comment. **To be resolved in M7**: either bake
-in the real publisher key or delete the constant. An inert malformed constant is
-a trap for whoever next assumes it works.
+Ported verbatim and inert, with a comment. **Resolved in M7** (`c4a5dab`): the
+malformed constant was removed rather than filled, so nothing now presents a
+fake verification path — the pinned keys in `/etc/penguin/trusted-publishers.d`
+remain the only mechanism.
+
+### 2.8 Metrics carry a name prefix, not a `module=` label (M8)
+
+Go namespaces each module's metrics with a `module="<name>"` **const label** on
+an otherwise-bare metric name (`squawk_queries_total{module="squawk"}`), applied
+centrally via `prometheus.WrapRegistererWith`. Rust instead prefixes the name
+(`penguin_module_squawk_queries_total`, with no `module` label), because tikv's
+`prometheus` crate has no `WrapRegistererWith` equivalent — reproducing Go's
+scheme would mean hand-adding a const label to every collector's `Opts` for no
+behavioural gain. The module identity is present either way, so the **scheme is
+waived**, not fixed.
+
+The metric *set* is otherwise matched 1:1: the base names now agree — the one
+gratuitous mismatch, tobogganing `conn_errors` → `connection_errors_total`, was
+fixed in M8 — and a `metrics_parity` test pins the Rust family/label set against
+a checked-in golden. (The waddlebot module is Rust-only, has no Go oracle, and is
+out of parity scope; a doubled `waddlebot_waddlebot_` prefix in it was a plain
+bug, also fixed in M8.)
+
+### 2.9 Raw daemon-stdout JSON log field names differ (M8)
+
+Go logs through zap (`timestamp`/`level`/`msg`/`logger` + ad-hoc fields); Rust
+through `tracing` (`module`/`fields`/`message`). The field names in the raw
+stdout JSON therefore differ — an inherent consequence of two different logging
+libraries, not a regression. The only log surface that crosses a boundary, the
+`LogLine{level,message,at}` returned by `TailLogs`, matches on both sides and is
+diffed by the parity harness. The internal stdout format is **waived**.
+
+### 2.10 One daemon-unreachable message where Go printed two (M8)
+
+Go emits two different "is penguind running?" strings depending on which code
+path noticed — a dial-time `"penguin: is penguind running? daemon unreachable"`
+and a friendly gRPC-`Unavailable` `"cannot reach penguind at %s — is the daemon
+running?"`. §1.14 already records that Rust makes the friendly message uniform
+across every verb; this completes it: Rust prints that **one** message everywhere
+and has no separate dial-path string. **Waived** — one clear message beats two
+that differ by accident of call path.
 
 ---
 
@@ -495,15 +550,16 @@ security-relevant escape hatch that has never existed in this product. If a
 bypass is ever genuinely wanted here, it needs a deliberate design, not an
 inference from a rule written for a different tier.
 
-These are unimplemented *yet*, tracked to their milestone, and listed so they are
-not mistaken for parity gaps.
+Items that were deferred to a later milestone, with their disposition as of the
+M8 audit. Listed so a done item is not mistaken for a parity gap, and a still-open
+one is not forgotten.
 
-| Item | Deferred to | Why |
+| Item | Disposition | Detail |
 |---|---|---|
-| `serve()` — the Rust-plugin entry point | M3 | Untestable until the go-plugin host exists to load it |
-| go-plugin / squawk protos | consuming milestone | Avoids accumulating generated-but-unused code |
-| Per-module const-label metric namespacing | M5 | tikv's prometheus has no `WrapRegistererWith`; no metrics consumer exists until squawk |
-| Windows IPC verification | M7 | Written and `cfg`-gated, but not compiled or exercised by Linux CI |
+| `serve()` — the Rust-plugin entry point | **delivered M3** | `crates/penguin-sdk/src/plugin/serve.rs`; `plugin-hello-rs` exercises it as the reverse-direction compat proof under the frozen Go daemon |
+| go-plugin / squawk protos | **delivered** (goplugin M3, squawk M5) | generated in `penguin-proto` and consumed by the go-plugin host and the squawk client — no generated-but-unused code accumulated |
+| Per-module const-label metric namespacing | **resolved M8 → waived (§2.8)** | tikv's prometheus has no `WrapRegistererWith`; Rust prefixes the metric name instead of adding a `module=` label — decided and recorded as a waiver in M8 |
+| Windows IPC verification | **still deferred** | Written and `#[cfg(windows)]`-gated, but not compiled or exercised on Linux CI — needs a Windows runner to verify |
 
 ## 5. Dependency notes
 

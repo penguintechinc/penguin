@@ -1,0 +1,64 @@
+{
+  "squawk": [
+    {
+      "name": "penguin_module_squawk_cache_entries",
+      "label_keys": []
+    },
+    {
+      "name": "penguin_module_squawk_dns_applied",
+      "label_keys": []
+    },
+    {
+      "name": "penguin_module_squawk_forwarder_up",
+      "label_keys": []
+    },
+    {
+      "name": "penguin_module_squawk_health_status",
+      "label_keys": []
+    },
+    {
+      "name": "penguin_module_squawk_queries_total",
+      "label_keys": []
+    }
+  ],
+  "tobogganing": [
+    {
+      "name": "penguin_module_tobogganing_connection_errors_total",
+      "label_keys": []
+    },
+    {
+      "name": "penguin_module_tobogganing_handshake_age_seconds",
+      "label_keys": []
+    },
+    {
+      "name": "penguin_module_tobogganing_rx_bytes_total",
+      "label_keys": []
+    },
+    {
+      "name": "penguin_module_tobogganing_token_refreshes_total",
+      "label_keys": []
+    },
+    {
+      "name": "penguin_module_tobogganing_tunnel_up",
+      "label_keys": []
+    },
+    {
+      "name": "penguin_module_tobogganing_tx_bytes_total",
+      "label_keys": []
+    }
+  ],
+  "waddlebot": [
+    {
+      "name": "penguin_module_waddlebot_api_errors_total",
+      "label_keys": []
+    },
+    {
+      "name": "penguin_module_waddlebot_api_requests_total",
+      "label_keys": []
+    },
+    {
+      "name": "penguin_module_waddlebot_up",
+      "label_keys": []
+    }
+  ]
+}

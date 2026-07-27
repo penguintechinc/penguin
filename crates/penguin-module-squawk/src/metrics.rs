@@ -12,10 +12,12 @@
 use penguin_sdk::{HealthLevel, Metrics, MetricsError};
 use prometheus::{Counter, Gauge, Opts};
 
-/// Namespace/subsystem shared by every squawk collector — matches the Go
-/// module's `prometheus.CounterOpts{Namespace: "penguin_module", Subsystem:
-/// "squawk", ...}` exactly, so the fully-qualified metric names
-/// (`penguin_module_squawk_squawk_*`) are unchanged.
+/// Namespace/subsystem shared by every squawk collector. Prometheus combines
+/// namespace + subsystem + name into fully-qualified metric names:
+/// `penguin_module_squawk_queries_total`, etc. This single-form scheme maps
+/// 1:1 to Go's bare-name scheme (`squawk_queries_total`) via the waived
+/// prefix-vs-label divergence (PARITY §2.8): Go adds a `module=squawk`
+/// const-label; Rust uses the namespace/subsystem split.
 const NAMESPACE: &str = "penguin_module";
 const SUBSYSTEM: &str = "squawk";
 
@@ -32,31 +34,30 @@ pub struct SquawkMetrics {
 }
 
 impl SquawkMetrics {
-    /// Builds all five collectors and registers each one with `registerer`,
-    /// preserving the exact names and help text the Go module used.
+    /// Builds all five collectors and registers each one with `registerer`.
+    /// Bare metric names are combined with namespace and subsystem into
+    /// fully-qualified names like `penguin_module_squawk_queries_total`.
     pub fn register(registerer: &dyn Metrics) -> Result<SquawkMetrics, MetricsError> {
-        let queries_total =
-            new_counter("squawk_queries_total", "Total number of DNS queries issued")?;
+        let queries_total = new_counter("queries_total", "Total number of DNS queries issued")?;
         registerer.register(Box::new(queries_total.clone()))?;
 
         let forwarder_up = new_gauge(
-            "squawk_forwarder_up",
+            "forwarder_up",
             "Whether the DNS forwarder is running (1 = running, 0 = stopped)",
         )?;
         registerer.register(Box::new(forwarder_up.clone()))?;
 
-        let cache_entries =
-            new_gauge("squawk_cache_entries", "Number of entries in the DNS cache")?;
+        let cache_entries = new_gauge("cache_entries", "Number of entries in the DNS cache")?;
         registerer.register(Box::new(cache_entries.clone()))?;
 
         let dns_applied = new_gauge(
-            "squawk_dns_applied",
+            "dns_applied",
             "Whether system DNS resolver is managed (1 = managed, 0 = not managed)",
         )?;
         registerer.register(Box::new(dns_applied.clone()))?;
 
         let health_status = new_gauge(
-            "squawk_health_status",
+            "health_status",
             "Module health status (0 = healthy, 1 = degraded, 2 = unhealthy)",
         )?;
         registerer.register(Box::new(health_status.clone()))?;
@@ -124,7 +125,7 @@ mod tests {
     }
 
     #[test]
-    fn register_wires_all_five_collectors_with_their_go_parity_names() {
+    fn register_wires_all_five_collectors_with_go_parity_names() {
         let registerer = RecordingRegisterer {
             registry: prometheus::Registry::new(),
             names: Mutex::new(Vec::new()),
@@ -133,11 +134,11 @@ mod tests {
 
         let names = registerer.names.lock().unwrap().clone();
         let expected = [
-            "penguin_module_squawk_squawk_queries_total",
-            "penguin_module_squawk_squawk_forwarder_up",
-            "penguin_module_squawk_squawk_cache_entries",
-            "penguin_module_squawk_squawk_dns_applied",
-            "penguin_module_squawk_squawk_health_status",
+            "penguin_module_squawk_queries_total",
+            "penguin_module_squawk_forwarder_up",
+            "penguin_module_squawk_cache_entries",
+            "penguin_module_squawk_dns_applied",
+            "penguin_module_squawk_health_status",
         ];
         for name in expected {
             assert!(names.contains(&name.to_string()), "missing {name}");

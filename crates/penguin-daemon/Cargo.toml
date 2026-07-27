@@ -55,3 +55,8 @@ minisign = "=0.9.1"
 # `penguin-extplugin` itself already uses, for one cryptographically
 # verified digest implementation across the two crates.
 sha2 = "=0.11.0"
+# Metrics parity test: first-party module metrics registration.
+penguin-module-squawk.workspace = true
+penguin-module-tobogganing.workspace = true
+penguin-module-waddlebot.workspace = true
+prometheus.workspace = true

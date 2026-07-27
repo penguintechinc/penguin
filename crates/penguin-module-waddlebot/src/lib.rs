@@ -17,7 +17,7 @@ mod bridge;
 mod commands;
 mod config;
 mod mask;
-mod metrics;
+pub mod metrics;
 mod module;
 #[cfg(test)]
 mod testutil;

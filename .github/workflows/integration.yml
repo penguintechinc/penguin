@@ -60,3 +60,16 @@ jobs:
         # that DOES have the module loaded, the gate actually exercises a
         # real tunnel instead of silently never building it.
         run: cargo test --workspace --locked --features penguin-module-tobogganing/integration-test -- --ignored
+
+      # Parity dim 7 (perf) + metrics values-under-load belong in this
+      # privileged tier, not plain parity CI — the forwarder QPS / daemon RSS
+      # sampling wants a real load generator against a mock DoH upstream
+      # (squawk-client testutil), and metric values only populate once the
+      # privileged module operations actually run. scripts/parity/perf.sh is
+      # informational and NEVER gates (it exits 0 regardless); this step is the
+      # declared home for that work, reusing this job's privileged setup rather
+      # than duplicating it.
+      - name: parity perf (informational, non-gating)
+        env:
+          PG_PERF_RUN: "1"
+        run: scripts/parity/perf.sh

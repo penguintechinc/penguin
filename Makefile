@@ -76,7 +76,7 @@ COVER_IGNORE_INT := $(COVER_EXCLUDE_ALWAYS)
 
 .PHONY: help build test test-unit test-integration test-integration-cover \
         lint format test-security smoke-test clean proto go-client-check \
-        pre-commit docker-image docker-volumes tools
+        pre-commit parity docker-image docker-volumes tools
 
 help: ## Show available targets
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -131,6 +131,15 @@ proto: ## Regenerate protobuf bindings (build.rs does this; forces a rebuild)
 
 go-client-check: ## Build + test the frozen Go reference client
 	$(MAKE) -C go-client build test
+
+# The M8 parity harness. run.sh builds the Rust binaries + the raw wire probe
+# itself and runs every gating gate (dims 1,2,3,5,6 + the metrics test); the
+# Go-dependent gates self-skip when the Go toolchain is absent (e.g. inside the
+# Rust-only image), so `make docker-parity` proves the Rust side and script
+# correctness, while CI's parity.yml runs the full cross-impl comparison with
+# both toolchains present. perf (dim 7) is informational and not run here.
+parity: ## Run the M8 parity harness (build + all gating parity gates)
+	scripts/parity/run.sh
 
 pre-commit: lint test test-security ## Everything that must pass before a commit
 

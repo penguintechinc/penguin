@@ -171,12 +171,29 @@ fn args_positional(min_args: i32, max_args: i32) -> Option<Arg> {
     if max_args == 0 {
         return None;
     }
-    let arg = Arg::new(ARGS_ID)
+    let mut arg = Arg::new(ARGS_ID)
         .value_name("ARGS")
         .value_parser(clap::value_parser!(String))
-        .trailing_var_arg(true)
         .allow_hyphen_values(true)
+        // Match cobra's `Args` validator (go-client/internal/cli/builder.go),
+        // which rejects `len(args) < MinArgs`. clap's `num_args` lower bound
+        // only constrains the count when the positional is present — a fully
+        // absent positional is not otherwise an error — so a `min_args >= 1`
+        // command additionally needs the arg marked required to reject the
+        // zero-argument case the way Go does.
+        .required(min_args > 0)
         .action(ArgAction::Set);
+    // `trailing_var_arg` is only valid on a positional that accepts MULTIPLE
+    // values: clap debug-asserts ("must accept multiple values") — and
+    // misbehaves in release, where the assert is compiled out — if it is set on
+    // a single-value positional. A module command declaring exactly one
+    // positional (`min_args >= 1, max_args == 1`, e.g. squawk's `query
+    // <domain>`) hits precisely that case, so gate the flag on the arg actually
+    // being multi-valued: `max_args` outside `0..=1` — i.e. unbounded (`-1`) or
+    // an explicit upper bound above 1.
+    if !(0..=1).contains(&max_args) {
+        arg = arg.trailing_var_arg(true);
+    }
     let arg = if max_args < 0 {
         arg.num_args(min..)
     } else {
@@ -382,6 +399,52 @@ mod tests {
         assert!(
             cmd.try_get_matches_from(["root", "at-most-two", "a", "b", "c"])
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn exactly_one_required_positional_builds_without_panicking() {
+        // Regression: `args_positional` unconditionally set `trailing_var_arg`,
+        // which clap forbids on a single-value positional — so any module
+        // command with `min_args: 1, max_args: 1` (e.g. squawk `query
+        // <domain>`) panicked clap's debug assertion while the tree was built,
+        // making `penguin squawk query ...` (and its `--help`) unusable. The
+        // parity harness's cli-tree gate caught this; this pins it at the unit
+        // level. Building and parsing must succeed, and the `1..=1` bound must
+        // still be enforced.
+        let spec = pb::CommandSpec {
+            name: "one-arg".to_string(),
+            min_args: 1,
+            max_args: 1,
+            ..Default::default()
+        };
+        let cmd = Command::new("root").subcommand(build_command_spec(&spec));
+        // `--help` forces clap to `_build_self` the subcommand (the path that
+        // panicked before the fix); it must yield a clean help error, never a
+        // panic.
+        let help = cmd
+            .clone()
+            .try_get_matches_from(["root", "one-arg", "--help"]);
+        assert!(
+            help.is_err(),
+            "--help should short-circuit into a help error"
+        );
+        assert!(
+            cmd.clone()
+                .try_get_matches_from(["root", "one-arg"])
+                .is_err(),
+            "zero args must be rejected (min_args = 1)"
+        );
+        assert!(
+            cmd.clone()
+                .try_get_matches_from(["root", "one-arg", "example.com"])
+                .is_ok(),
+            "exactly one arg must be accepted"
+        );
+        assert!(
+            cmd.try_get_matches_from(["root", "one-arg", "a", "b"])
+                .is_err(),
+            "two args must be rejected (max_args = 1)"
         );
     }
 

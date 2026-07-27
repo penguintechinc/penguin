@@ -431,7 +431,7 @@ pub(crate) async fn establish_tunnel(module: &TobogganingModule) -> Result<(), M
         .map_err(|err| ModuleError::new(format!("failed to obtain token: {err}")))?;
 
     if let Err(err) = module.vpn().connect(module.auth()).await {
-        module.metrics().conn_errors.inc();
+        module.metrics().connection_errors.inc();
         return Err(ModuleError::new(format!(
             "failed to establish tunnel: {err}"
         )));
@@ -487,7 +487,7 @@ async fn auth_refresh_loop(module: TobogganingModule, cancel: CancellationToken)
                 module.host().logger().debug("token expiring soon, refreshing...", &[]);
                 if let Err(err) = module.auth().ensure_valid_token().await {
                     module.host().logger().error("token refresh failed", &[("error", &err.to_string())]);
-                    module.metrics().conn_errors.inc();
+                    module.metrics().connection_errors.inc();
                     continue;
                 }
                 module.metrics().token_refreshes.inc();

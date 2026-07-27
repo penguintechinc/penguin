@@ -12,7 +12,7 @@
 mod commands;
 mod config;
 mod mask;
-mod metrics;
+pub mod metrics;
 mod module;
 pub mod sysresolver;
 #[cfg(test)]

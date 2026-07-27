@@ -23,7 +23,7 @@ mod auth;
 mod commands;
 mod config;
 mod http;
-mod metrics;
+pub mod metrics;
 mod module;
 #[cfg(test)]
 mod testutil;

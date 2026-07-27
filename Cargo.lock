@@ -3116,9 +3116,13 @@ dependencies = [
  "minisign",
  "penguin-extplugin",
  "penguin-goplugin-host",
+ "penguin-module-squawk",
+ "penguin-module-tobogganing",
+ "penguin-module-waddlebot",
  "penguin-proto",
  "penguin-sdk",
  "penguin-telemetry",
+ "prometheus",
  "rand 0.9.5",
  "serde",
  "serde_json",
@@ -3267,6 +3271,7 @@ dependencies = [
  "tokio-tungstenite",
  "tokio-util",
  "tracing",
+ "url",
  "waddlebot-client",
 ]
 

@@ -248,18 +248,62 @@ async fn run_obs_connection(config: ObsConfig, state: Arc<BridgeState>) -> Resul
     Ok(())
 }
 
-/// Validates that the given URL is a loopback address. OBS connection is
-/// only allowed to localhost to match the bridge's security model.
+/// Validates that the given URL is a WebSocket loopback address.
+/// The adapter only connects to local OBS servers (127.0.0.0/8 or ::1)
+/// to prevent credential exfiltration via SSRF attacks.
+///
+/// Security contract: only accepts `ws://` scheme (not `wss`, `http`, etc.)
+/// and verifies the host is a loopback address via proper URL parsing
+/// (not substring matching, which is trivially bypassable).
 fn validate_loopback_url(url: &str) -> Result<(), String> {
-    // Simple check: the URL must contain 127.0.0.1 or localhost (case-insensitive).
-    let lower = url.to_lowercase();
-    if lower.contains("127.0.0.1") || lower.contains("localhost") {
-        Ok(())
-    } else {
-        Err(format!(
-            "OBS WebSocket URL must be loopback (127.0.0.1 or localhost), got: {}",
-            url
-        ))
+    let parsed = url::Url::parse(url).map_err(|e| format!("invalid URL: {}", e))?;
+
+    // Only accept ws:// scheme (plaintext loopback connection).
+    // wss://, http://, https://, etc. are rejected.
+    if parsed.scheme() != "ws" {
+        return Err(format!(
+            "OBS WebSocket URL must use ws:// scheme, got: {}",
+            parsed.scheme()
+        ));
+    }
+
+    // Extract and validate the host.
+    let host = parsed.host().ok_or("OBS WebSocket URL has no host")?;
+
+    match host {
+        url::Host::Domain(d) => {
+            // Only localhost is accepted (case-insensitive).
+            if d.eq_ignore_ascii_case("localhost") {
+                Ok(())
+            } else {
+                Err(format!(
+                    "OBS WebSocket URL host must be localhost, got: {}",
+                    d
+                ))
+            }
+        }
+        url::Host::Ipv4(ip) => {
+            // Accept if the IP is a loopback address (127.0.0.0/8).
+            if std::net::IpAddr::V4(ip).is_loopback() {
+                Ok(())
+            } else {
+                Err(format!(
+                    "OBS WebSocket URL must be a loopback address, got: {}",
+                    ip
+                ))
+            }
+        }
+        url::Host::Ipv6(ip) => {
+            // Accept if the IP is a loopback address (::1).
+            if std::net::IpAddr::V6(ip).is_loopback() {
+                Ok(())
+            } else {
+                Err(format!(
+                    "OBS WebSocket URL must be a loopback address, got: {}",
+                    ip
+                ))
+            }
+        }
     }
 }
 
@@ -472,9 +516,88 @@ mod tests {
     }
 
     #[test]
+    fn validate_loopback_url_accepts_ipv6_loopback() {
+        assert!(validate_loopback_url("ws://[::1]:4455").is_ok());
+    }
+
+    #[test]
+    fn validate_loopback_url_accepts_entire_loopback_range() {
+        assert!(validate_loopback_url("ws://127.0.0.2:4455").is_ok());
+        assert!(validate_loopback_url("ws://127.255.255.255:4455").is_ok());
+    }
+
+    #[test]
     fn validate_loopback_url_rejects_external_addresses() {
         assert!(validate_loopback_url("ws://192.168.1.1:4455").is_err());
         assert!(validate_loopback_url("ws://example.com:4455").is_err());
+    }
+
+    #[test]
+    fn validate_loopback_url_rejects_substring_bypass_with_path() {
+        // Attacker tries to bypass by appending 127.0.0.1 in the path
+        assert!(validate_loopback_url("ws://evil.com/?x=127.0.0.1").is_err());
+    }
+
+    #[test]
+    fn validate_loopback_url_rejects_substring_bypass_with_fragment() {
+        // Attacker tries to bypass by appending localhost in fragment
+        assert!(validate_loopback_url("ws://evil.com#localhost").is_err());
+    }
+
+    #[test]
+    fn validate_loopback_url_rejects_domain_suffix_bypass() {
+        // Attacker tries to bypass with domain that has loopback as suffix
+        assert!(validate_loopback_url("ws://127.0.0.1.evil.com:4455/").is_err());
+        assert!(validate_loopback_url("ws://localhost.evil.com/").is_err());
+    }
+
+    #[test]
+    fn validate_loopback_url_rejects_userinfo_confusion() {
+        // Attacker tries to bypass using userinfo (127.0.0.1@evil.com has host evil.com)
+        assert!(validate_loopback_url("ws://127.0.0.1@evil.com:4455").is_err());
+    }
+
+    #[test]
+    fn validate_loopback_url_rejects_private_network_addresses() {
+        // Reject LAN addresses (10/8, 172.16/12, 192.168/16)
+        assert!(validate_loopback_url("ws://192.168.1.1:4455").is_err());
+        assert!(validate_loopback_url("ws://10.0.0.1:4455").is_err());
+        assert!(validate_loopback_url("ws://172.16.0.1:4455").is_err());
+    }
+
+    #[test]
+    fn validate_loopback_url_rejects_cloud_metadata_address() {
+        // Reject cloud metadata endpoint (AWS, GCP, etc.)
+        assert!(validate_loopback_url("ws://169.254.169.254:4455").is_err());
+    }
+
+    #[test]
+    fn validate_loopback_url_rejects_wrong_scheme_wss() {
+        // Only ws:// is allowed, not wss://
+        assert!(validate_loopback_url("wss://127.0.0.1:4455").is_err());
+        assert!(validate_loopback_url("wss://localhost:4455").is_err());
+        assert!(validate_loopback_url("wss://[::1]:4455").is_err());
+    }
+
+    #[test]
+    fn validate_loopback_url_rejects_wrong_scheme_http() {
+        // Reject http:// and https://
+        assert!(validate_loopback_url("http://127.0.0.1:4455").is_err());
+        assert!(validate_loopback_url("https://127.0.0.1:4455").is_err());
+        assert!(validate_loopback_url("http://localhost:4455").is_err());
+    }
+
+    #[test]
+    fn validate_loopback_url_rejects_malformed_url() {
+        // Reject URLs that cannot be parsed
+        assert!(validate_loopback_url("not a valid url").is_err());
+        assert!(validate_loopback_url("://invalid").is_err());
+    }
+
+    #[test]
+    fn validate_loopback_url_rejects_no_host() {
+        // Reject URLs with no host
+        assert!(validate_loopback_url("ws://").is_err());
     }
 
     #[test]
