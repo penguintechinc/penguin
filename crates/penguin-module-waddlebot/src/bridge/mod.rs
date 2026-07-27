@@ -37,6 +37,7 @@
 //! trait yet.
 
 mod http;
+pub mod obs;
 mod relay;
 mod scope;
 mod state;
@@ -358,6 +359,7 @@ mod tests {
             listen_tcp: "127.0.0.1:0".to_string(),
             listen_unix: socket_path.to_string_lossy().into_owned(),
             allowed_integrations: vec!["watcher".to_string()],
+            ..Default::default()
         };
         let deps = BridgeDeps {
             module,
@@ -394,6 +396,7 @@ mod tests {
             listen_tcp: "0.0.0.0:0".to_string(),
             listen_unix: String::new(),
             allowed_integrations: Vec::new(),
+            ..Default::default()
         };
         let deps = BridgeDeps {
             module,
@@ -418,6 +421,7 @@ mod tests {
             listen_tcp: String::new(),
             listen_unix: String::new(),
             allowed_integrations: Vec::new(),
+            ..Default::default()
         };
         let deps = BridgeDeps {
             module,
@@ -472,6 +476,7 @@ mod tests {
             listen_tcp: "127.0.0.1:0".to_string(),
             listen_unix: String::new(),
             allowed_integrations: vec!["music-panel".to_string()],
+            ..Default::default()
         };
         let deps = BridgeDeps {
             module,
@@ -585,6 +590,7 @@ mod tests {
             listen_tcp: "127.0.0.1:0".to_string(),
             listen_unix: String::new(),
             allowed_integrations: vec!["watcher".to_string()],
+            ..Default::default()
         };
         let deps = BridgeDeps {
             module,

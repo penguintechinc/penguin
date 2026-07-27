@@ -37,6 +37,13 @@ nix.workspace = true
 serde.workspace = true
 serde-norway.workspace = true
 serde_json.workspace = true
+# OBS WebSocket v5 adapter dependencies: SHA256 hashing for the auth challenge,
+# WebSocket client for the loopback connection, base64 encoding for the auth
+# handshake, and async stream/sink utilities.
+sha2.workspace = true
+tokio-tungstenite.workspace = true
+futures-util.workspace = true
+base64.workspace = true
 
 [dev-dependencies]
 tempfile = "3"
@@ -52,3 +59,6 @@ reqwest.workspace = true
 # Encodes a `Sec-WebSocket-Key` for the hand-rolled WebSocket test client in
 # `bridge::http`'s tests (no WS client crate is in the workspace).
 base64.workspace = true
+# obs-adapter tests: mock OBS WebSocket server uses these utilities.
+tokio-tungstenite.workspace = true
+futures-util.workspace = true

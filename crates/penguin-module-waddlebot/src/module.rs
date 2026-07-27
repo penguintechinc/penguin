@@ -281,10 +281,39 @@ impl WaddlebotModule {
         }
 
         let cat = self.inner.cat.lock().expect("cat mutex poisoned").clone();
+
+        // Build the list of adapters to attach. OBS adapter is created if
+        // enabled in the config and the password secret is available.
+        let mut adapters: Vec<Arc<dyn crate::bridge::BridgeAdapter>> = Vec::new();
+        if self.config().bridge.obs.enabled && !self.config().bridge.obs.url.is_empty() {
+            match self
+                .host()
+                .secrets()
+                .get(&self.config().bridge.obs.secret_key)
+                .await
+            {
+                Ok(password_bytes) => {
+                    let password = String::from_utf8_lossy(&password_bytes).into_owned();
+                    let obs_config = crate::bridge::obs::ObsConfig::new(
+                        self.config().bridge.obs.url.clone(),
+                        password,
+                    );
+                    let obs_adapter = Arc::new(crate::bridge::obs::ObsAdapter::new(obs_config));
+                    adapters.push(obs_adapter);
+                }
+                Err(_not_found) => {
+                    self.host().logger().warn(
+                        "OBS adapter disabled: secret not found",
+                        &[("secret_key", self.config().bridge.obs.secret_key.as_str())],
+                    );
+                }
+            }
+        }
+
         let deps = crate::bridge::BridgeDeps {
             module: self.clone(),
             cat,
-            adapters: Vec::new(),
+            adapters,
         };
         let handle = crate::bridge::start(&self.config().bridge, deps)
             .await

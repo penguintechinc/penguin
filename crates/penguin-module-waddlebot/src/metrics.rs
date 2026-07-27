@@ -29,19 +29,19 @@ impl WaddlebotMetrics {
     /// Builds all three collectors and registers each with `registerer`.
     pub fn register(registerer: &dyn Metrics) -> Result<WaddlebotMetrics, MetricsError> {
         let api_requests_total = new_counter(
-            "waddlebot_api_requests_total",
+            "api_requests_total",
             "Total number of requests sent to the waddlebot hub",
         )?;
         registerer.register(Box::new(api_requests_total.clone()))?;
 
         let api_errors_total = new_counter(
-            "waddlebot_api_errors_total",
+            "api_errors_total",
             "Total number of failed waddlebot hub requests (auth, HTTP status, transport, or decode errors)",
         )?;
         registerer.register(Box::new(api_errors_total.clone()))?;
 
         let up = new_gauge(
-            "waddlebot_up",
+            "up",
             "Whether the waddlebot module is running (1 = running, 0 = stopped)",
         )?;
         registerer.register(Box::new(up.clone()))?;
@@ -106,9 +106,9 @@ mod tests {
 
         let names = reg.names.lock().unwrap().clone();
         let expected = [
-            "penguin_module_waddlebot_waddlebot_api_requests_total",
-            "penguin_module_waddlebot_waddlebot_api_errors_total",
-            "penguin_module_waddlebot_waddlebot_up",
+            "penguin_module_waddlebot_api_requests_total",
+            "penguin_module_waddlebot_api_errors_total",
+            "penguin_module_waddlebot_up",
         ];
         for name in expected {
             assert!(names.contains(&name.to_string()), "missing {name}");

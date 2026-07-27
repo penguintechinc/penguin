@@ -54,6 +54,29 @@ pub struct BridgeSection {
     pub listen_tcp: String,
     pub listen_unix: String,
     pub allowed_integrations: Vec<String>,
+    pub obs: ObsSection,
+}
+
+/// OBS WebSocket adapter configuration for the bridge.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(default)]
+pub struct ObsSection {
+    /// Whether to enable the OBS adapter.
+    pub enabled: bool,
+    /// The OBS WebSocket server URL (typically `ws://127.0.0.1:4455`).
+    pub url: String,
+    /// The secret key name in the secrets store for the OBS password.
+    pub secret_key: String,
+}
+
+impl Default for ObsSection {
+    fn default() -> ObsSection {
+        ObsSection {
+            enabled: false,
+            url: String::new(),
+            secret_key: "obs_password".to_string(),
+        }
+    }
 }
 
 /// The JSON Schema the daemon validates `waddlebot.yaml` against.
@@ -100,6 +123,27 @@ pub const CONFIG_SCHEMA: &str = r#"{
           "items": { "type": "string" },
           "description": "Local integration names permitted to connect to the bridge",
           "default": []
+        },
+        "obs": {
+          "type": "object",
+          "description": "OBS WebSocket adapter configuration",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Enable the OBS WebSocket adapter",
+              "default": false
+            },
+            "url": {
+              "type": "string",
+              "description": "OBS WebSocket server URL (e.g., ws://127.0.0.1:4455)",
+              "default": ""
+            },
+            "secret_key": {
+              "type": "string",
+              "description": "Secret store key for the OBS WebSocket password",
+              "default": "obs_password"
+            }
+          }
         }
       }
     }
@@ -184,5 +228,26 @@ mod tests {
             .as_bool()
             .unwrap();
         assert_eq!(advertised, ModuleConfig::default().bridge.enabled);
+    }
+
+    #[test]
+    fn schema_default_for_obs_config_matches_the_code_default() {
+        let schema: serde_json::Value = serde_json::from_str(CONFIG_SCHEMA).unwrap();
+        let obs_schema = &schema["properties"]["bridge"]["properties"]["obs"]["properties"];
+
+        let enabled_advertised = obs_schema["enabled"]["default"].as_bool().unwrap();
+        assert_eq!(
+            enabled_advertised,
+            ModuleConfig::default().bridge.obs.enabled
+        );
+
+        let url_advertised = obs_schema["url"]["default"].as_str().unwrap();
+        assert_eq!(url_advertised, ModuleConfig::default().bridge.obs.url);
+
+        let secret_key_advertised = obs_schema["secret_key"]["default"].as_str().unwrap();
+        assert_eq!(
+            secret_key_advertised,
+            ModuleConfig::default().bridge.obs.secret_key
+        );
     }
 }
