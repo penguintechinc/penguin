@@ -77,6 +77,8 @@ tokio-stream = { version = "0.1", features = ["net"] }
 # CancellationToken is the direct analogue of Go's context.WithCancel, used for
 # the supervisor lifetime and per-module cancellation.
 tokio-util = { version = "0.7", features = ["rt"] }
+# Zero-copy byte buffers for packet forwarding in the userspace WireGuard backend.
+bytes = "1.8"
 # gRPC health service the go-plugin host and the daemon both expose.
 tonic-health = "=0.14.6"
 # Restart-backoff jitter. The exact Go formula is ported by hand rather than
@@ -148,6 +150,9 @@ hyper-util = { version = "0.1", default-features = false, features = [
 # os/user (cgo) behaviour on LDAP/sssd hosts — a plain /etc/group parse would
 # silently diverge there.
 nix = { version = "0.30", features = ["user", "fs"] }
+# Low-level Unix system calls (ioctl, open, etc.) for TUN device creation in
+# the userspace WireGuard backend.
+libc = "0.2"
 
 # OS keychain backends (Windows Credential Manager, macOS Keychain, Linux
 # Secret Service). Unlike Go's 99designs/keyring this crate has NO encrypted

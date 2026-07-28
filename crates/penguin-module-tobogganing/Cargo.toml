@@ -23,6 +23,8 @@ async-trait.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
+bytes.workspace = true
+libc.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 # YAML parsing of the module's own on-disk config — same crate
@@ -75,13 +77,18 @@ tempfile = "3"
 # same rationale as `penguin-module-squawk`'s identical dev-dependency.
 jsonschema.workspace = true
 
-# `required-features` makes this target invisible to every plain `cargo
+# `required-features` makes these targets invisible to every plain `cargo
 # build`/`cargo test`/`cargo clippy --all-targets` in the workspace (unit
 # gate, default lint, CI's own non-integration steps) — none of them enable
 # `integration-test`, so none of them ever need `wireguard` to be `pub` to
 # compile. Only `scripts/wg-tunnel/run.sh` and the integration workflow pass
-# `--features integration-test` and actually build/run it.
+# `--features integration-test` and actually build/run them.
 [[test]]
 name = "wg_tunnel"
 path = "tests/wg_tunnel.rs"
+required-features = ["integration-test"]
+
+[[test]]
+name = "userspace_tunnel"
+path = "tests/userspace_tunnel.rs"
 required-features = ["integration-test"]

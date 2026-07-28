@@ -46,6 +46,8 @@ use defguard_wireguard_rs::{key::Key, net::IpAddrMask};
 // macOS even though nothing there would ever construct a `KernelBackend`.
 #[cfg(target_os = "linux")]
 pub mod kernel;
+#[cfg(target_os = "linux")]
+pub mod tun_linux;
 pub mod userspace;
 
 #[cfg(test)]
@@ -134,6 +136,7 @@ pub enum WgBackendError {
     /// instead of a silent no-op — see [`userspace`]'s module doc for the
     /// one case this currently applies to.
     #[error("{operation} is not supported by this backend: {reason}")]
+    #[allow(dead_code)]
     Unsupported {
         operation: &'static str,
         reason: &'static str,

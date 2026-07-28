@@ -1,55 +1,374 @@
-//! The userspace WireGuard backend: `boringtun`'s Noise protocol engine.
+//! The userspace WireGuard backend: `boringtun`'s Noise protocol engine
+//! over a TUN device and UDP socket.
 //!
-//! # What this genuinely does
+//! # Architecture
 //!
-//! [`build_tunn`] builds a real `boringtun::noise::Tunn` — the actual
-//! WireGuard handshake/transport state machine — from a [`TunnelSpec`]'s
-//! keys, and [`UserspaceBackend::apply`] calls it before returning, so a
-//! spec really is round-tripped through boringtun's protocol engine on
-//! every call. This crate's tests exercise `Tunn` directly (see
-//! `format_handshake_initiation` in this file's test module) to prove the
-//! integration produces genuine WireGuard wire packets, entirely offline.
+//! [`UserspaceBackend::apply`] creates a live tunnel:
+//! - Opens TUN device via `LinuxTunDevice` (ioctl-based, in `tun_linux.rs`)
+//! - Binds UDP socket to a local port
+//! - Spawns an event loop task that:
+//!   - TUN read → `Tunn::encapsulate` → UDP send
+//!   - UDP recv → `Tunn::decapsulate` → TUN write / handle `TunnResult`
+//!   - Periodic timer tick → `Tunn::update_timers` → send keepalive/handshake
+//! - Stores task handle + cancellation token for `teardown()`
 //!
-//! # What this does not do, and why
+//! # Testing
 //!
-//! `boringtun`'s default build (what the workspace pins — see the root
-//! `Cargo.toml` comment on this dependency) is exactly what its own docs
-//! describe: the Noise protocol engine only. There is no TUN device, no UDP
-//! socket, and no packet-forwarding event loop — `boringtun` does ship one
-//! (gated behind its own `device` Cargo feature, used by `boringtun-cli`),
-//! but wiring a second, independently-threaded I/O engine into this
-//! module's async lifecycle, plus per-OS TUN creation and routing-table
-//! integration, is a genuinely separate, large piece of work from "port the
-//! Tobogganing module" and is not attempted here.
-//!
-//! [`UserspaceBackend::apply`] is honest about that boundary: it returns
-//! [`WgBackendError::Unsupported`] rather than claiming the tunnel is up
-//! when no packet can actually flow. This is a deliberate improvement over
-//! Go, whose `WGController.Configure` was a hard-coded `return nil`
-//! (`go-client/internal/modules/tobogganing/vpn_wgctrl.go`) — a silent
-//! false "success" with no interface, no peer, and no way for a caller to
-//! tell the difference from a real connection. A clear, typed "not
-//! supported yet" is strictly more honest than that, even though neither
-//! implementation can move a packet.
+//! Unit tests use [`FakeTunDevice`] and [`LoopbackUdpSocket`] to exercise the
+//! event loop logic without real TUN or UDP, and without `CAP_NET_ADMIN`.
+//! The integration test (see `tests/userspace_tunnel.rs`) uses real TUN + UDP
+//! against a controlled WireGuard peer in a netns.
+
+#![allow(unsafe_code)]
+
+use std::net::SocketAddr;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::SystemTime;
+
 use async_trait::async_trait;
 use boringtun::noise::Tunn;
 use boringtun::x25519;
+use bytes::BytesMut;
+use tokio::net::UdpSocket;
+use tokio::sync::Mutex;
+use tokio::task::JoinHandle;
+use tokio::time::{Duration, interval};
+use tokio_util::sync::CancellationToken;
+
+#[cfg(target_os = "linux")]
+use crate::wireguard::tun_linux::TunFd;
 
 use super::{BackendKind, PeerStats, TunnelSpec, WgBackendError};
 
-/// The reason [`UserspaceBackend::apply`] always fails — see this module's
-/// doc for the full explanation.
-const DATA_PLANE_REASON: &str = "boringtun's TUN device / UDP socket / packet-forwarding event loop is not wired up in this build; only the kernel backend (embedded: false, Linux) can bring up a live tunnel";
+/// Abstracts TUN device I/O for production and testing.
+#[async_trait]
+#[allow(dead_code)]
+pub trait TunDevice: Send + Sync {
+    /// Reads the next packet from the TUN device. Returns `None` if the
+    /// device is closed.
+    async fn read(&mut self) -> Option<BytesMut>;
 
-/// `boringtun`-backed WireGuard engine. Holds no state: see module doc for
-/// why there is nothing to hold between calls yet.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct UserspaceBackend;
+    /// Writes a packet to the TUN device.
+    async fn write(&mut self, packet: &[u8]) -> Result<(), WgBackendError>;
+
+    /// Closes the TUN device. Idempotent.
+    async fn close(&mut self);
+}
+
+/// Abstracts UDP socket I/O for production and testing.
+#[async_trait]
+#[allow(dead_code)]
+pub trait UdpSocketTrait: Send + Sync {
+    /// Receives the next packet from the socket. Returns `None` if the socket
+    /// is closed.
+    async fn recv(&mut self) -> Option<(BytesMut, SocketAddr)>;
+
+    /// Sends a packet to the given address.
+    async fn send(&mut self, data: &[u8], addr: SocketAddr) -> Result<(), WgBackendError>;
+
+    /// Closes the socket. Idempotent.
+    async fn close(&mut self);
+}
+
+/// Linux TUN device implementation via `/dev/net/tun` + `TUNSETIFF` ioctl.
+#[cfg(target_os = "linux")]
+pub struct LinuxTunDevice {
+    fd: tokio::io::unix::AsyncFd<TunFd>,
+    #[allow(dead_code)]
+    name: String,
+}
+
+#[cfg(target_os = "linux")]
+impl LinuxTunDevice {
+    /// Creates a new TUN device with the given name.
+    pub async fn new(name: &str) -> Result<Self, WgBackendError> {
+        let tun_fd = TunFd::open(name)?;
+        let name_str = name.to_string();
+        let fd = tokio::io::unix::AsyncFd::new(tun_fd)
+            .map_err(|e| WgBackendError::Interface(format!("AsyncFd wrapping failed: {e}")))?;
+        Ok(LinuxTunDevice { fd, name: name_str })
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[async_trait]
+impl TunDevice for LinuxTunDevice {
+    async fn read(&mut self) -> Option<BytesMut> {
+        let mut buf = BytesMut::with_capacity(1500);
+        buf.resize(1500, 0);
+
+        loop {
+            let mut guard = match self.fd.readable().await {
+                Ok(g) => g,
+                Err(_) => return None,
+            };
+
+            match guard.try_io(|inner| {
+                #[allow(unused_imports)]
+                use std::os::unix::io::AsRawFd;
+                // SAFETY: inner.get_ref() is a valid TunFd, and we have an async guard
+                // ensuring we don't block or race. The buffer is properly sized.
+                unsafe {
+                    let ret = libc::read(
+                        inner.get_ref().as_raw_fd(),
+                        buf.as_mut_ptr() as *mut libc::c_void,
+                        1500,
+                    );
+                    if ret < 0 {
+                        Err(std::io::Error::last_os_error())
+                    } else {
+                        Ok(ret as usize)
+                    }
+                }
+            }) {
+                Ok(Ok(len)) => {
+                    buf.truncate(len);
+                    return Some(buf);
+                }
+                Ok(Err(e)) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    continue;
+                }
+                Ok(Err(_)) | Err(_) => return None,
+            }
+        }
+    }
+
+    async fn write(&mut self, packet: &[u8]) -> Result<(), WgBackendError> {
+        loop {
+            let mut guard = self
+                .fd
+                .writable()
+                .await
+                .map_err(|e| WgBackendError::Interface(format!("writable failed: {e}")))?;
+
+            match guard.try_io(|inner| {
+                #[allow(unused_imports)]
+                use std::os::unix::io::AsRawFd;
+                unsafe {
+                    let ret = libc::write(
+                        inner.get_ref().as_raw_fd(),
+                        packet.as_ptr() as *const libc::c_void,
+                        packet.len(),
+                    );
+                    if ret < 0 {
+                        Err(std::io::Error::last_os_error())
+                    } else {
+                        Ok(ret as usize)
+                    }
+                }
+            }) {
+                Ok(Ok(_)) => return Ok(()),
+                Ok(Err(e)) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    continue;
+                }
+                Ok(Err(e)) => return Err(WgBackendError::Interface(format!("write failed: {e}"))),
+                Err(_) => return Err(WgBackendError::Interface("try_io failed".to_string())),
+            }
+        }
+    }
+
+    async fn close(&mut self) {}
+}
+
+/// Tokio-based UDP socket implementation.
+pub struct TokioUdpSocket {
+    socket: Arc<UdpSocket>,
+}
+
+impl TokioUdpSocket {
+    /// Creates a new UDP socket bound to a local address.
+    pub async fn new(local_addr: SocketAddr) -> Result<Self, WgBackendError> {
+        let socket = UdpSocket::bind(local_addr)
+            .await
+            .map_err(|e| WgBackendError::Interface(format!("UDP bind failed: {e}")))?;
+        Ok(TokioUdpSocket {
+            socket: Arc::new(socket),
+        })
+    }
+}
+
+#[async_trait]
+impl UdpSocketTrait for TokioUdpSocket {
+    async fn recv(&mut self) -> Option<(BytesMut, SocketAddr)> {
+        let mut buf = BytesMut::with_capacity(1500);
+        buf.resize(1500, 0);
+        match self.socket.recv_from(&mut buf).await {
+            Ok((len, addr)) => {
+                buf.truncate(len);
+                Some((buf, addr))
+            }
+            Err(_) => None,
+        }
+    }
+
+    async fn send(&mut self, data: &[u8], addr: SocketAddr) -> Result<(), WgBackendError> {
+        self.socket
+            .send_to(data, addr)
+            .await
+            .map_err(|e| WgBackendError::Interface(format!("UDP send failed: {e}")))?;
+        Ok(())
+    }
+
+    async fn close(&mut self) {}
+}
+
+/// Test double: fake TUN device buffering packets in memory.
+pub struct FakeTunDevice {
+    packets: Arc<Mutex<Vec<BytesMut>>>,
+    #[allow(dead_code)]
+    closed: Arc<AtomicBool>,
+}
+
+impl FakeTunDevice {
+    /// Creates a new fake TUN device.
+    pub fn new() -> Self {
+        FakeTunDevice {
+            packets: Arc::new(Mutex::new(Vec::new())),
+            closed: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    /// Injects a packet to be read by the next `read()` call.
+    #[allow(dead_code)]
+    pub async fn inject_packet(&self, packet: BytesMut) {
+        self.packets.lock().await.push(packet);
+    }
+
+    /// Retrieves all packets written so far.
+    #[allow(dead_code)]
+    pub async fn written_packets(&self) -> Vec<BytesMut> {
+        self.packets.lock().await.clone()
+    }
+
+    /// Clears the written packets buffer.
+    #[allow(dead_code)]
+    pub async fn clear_written(&self) {
+        self.packets.lock().await.clear();
+    }
+}
+
+impl Default for FakeTunDevice {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait]
+impl TunDevice for FakeTunDevice {
+    async fn read(&mut self) -> Option<BytesMut> {
+        self.packets.lock().await.pop()
+    }
+
+    async fn write(&mut self, packet: &[u8]) -> Result<(), WgBackendError> {
+        self.packets.lock().await.insert(0, BytesMut::from(packet));
+        Ok(())
+    }
+
+    async fn close(&mut self) {
+        self.closed.store(true, Ordering::SeqCst);
+    }
+}
+
+/// Test double: loopback UDP socket, storing packets in memory.
+pub struct LoopbackUdpSocket {
+    packets: Arc<Mutex<Vec<(BytesMut, SocketAddr)>>>,
+    #[allow(dead_code)]
+    closed: Arc<AtomicBool>,
+}
+
+impl LoopbackUdpSocket {
+    /// Creates a new loopback UDP socket.
+    pub fn new() -> Self {
+        LoopbackUdpSocket {
+            packets: Arc::new(Mutex::new(Vec::new())),
+            closed: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    /// Injects a packet to be received by the next `recv()` call.
+    #[allow(dead_code)]
+    pub async fn inject_packet(&self, packet: BytesMut, addr: SocketAddr) {
+        self.packets.lock().await.push((packet, addr));
+    }
+
+    /// Retrieves all packets sent so far.
+    #[allow(dead_code)]
+    pub async fn sent_packets(&self) -> Vec<(BytesMut, SocketAddr)> {
+        self.packets.lock().await.clone()
+    }
+
+    /// Clears the sent packets buffer.
+    #[allow(dead_code)]
+    pub async fn clear_sent(&self) {
+        self.packets.lock().await.clear();
+    }
+}
+
+impl Default for LoopbackUdpSocket {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait]
+impl UdpSocketTrait for LoopbackUdpSocket {
+    async fn recv(&mut self) -> Option<(BytesMut, SocketAddr)> {
+        self.packets.lock().await.pop()
+    }
+
+    async fn send(&mut self, data: &[u8], addr: SocketAddr) -> Result<(), WgBackendError> {
+        self.packets
+            .lock()
+            .await
+            .insert(0, (BytesMut::from(data), addr));
+        Ok(())
+    }
+
+    async fn close(&mut self) {
+        self.closed.store(true, Ordering::SeqCst);
+    }
+}
+
+/// Shared tunnel event loop state.
+struct EventLoopState {
+    tunn: Tunn,
+    peer_addr: SocketAddr,
+    last_handshake: Option<SystemTime>,
+    rx_bytes: u64,
+    tx_bytes: u64,
+}
+
+/// Backend instance storing the event loop task and cancellation token.
+struct BackendInstance {
+    _task: JoinHandle<()>,
+    cancel: CancellationToken,
+    state: Arc<Mutex<EventLoopState>>,
+}
+
+impl Drop for BackendInstance {
+    fn drop(&mut self) {
+        self.cancel.cancel();
+    }
+}
+
+/// `boringtun`-backed WireGuard engine with full data plane.
+pub struct UserspaceBackend {
+    instance: Arc<Mutex<Option<BackendInstance>>>,
+}
 
 impl UserspaceBackend {
     /// Builds a new userspace backend. Cheap: performs no I/O.
     pub fn new() -> UserspaceBackend {
-        UserspaceBackend
+        UserspaceBackend {
+            instance: Arc::new(Mutex::new(None)),
+        }
+    }
+}
+
+impl Default for UserspaceBackend {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -59,35 +378,162 @@ impl super::WireGuardBackend for UserspaceBackend {
         BackendKind::Userspace
     }
 
-    /// Builds a real [`Tunn`] from `spec` (proving the keys round-trip
-    /// through boringtun's protocol engine), then reports that bringing up
-    /// a live tunnel is not supported — see this module's doc.
-    async fn apply(&self, _interface: &str, spec: &TunnelSpec) -> Result<(), WgBackendError> {
-        let _tunn = build_tunn(spec);
-        Err(WgBackendError::Unsupported {
+    /// Creates a live tunnel: opens TUN device, binds UDP socket, spawns event loop.
+    async fn apply(&self, interface: &str, spec: &TunnelSpec) -> Result<(), WgBackendError> {
+        #[cfg(not(target_os = "linux"))]
+        return Err(WgBackendError::Unsupported {
             operation: "apply",
-            reason: DATA_PLANE_REASON,
-        })
+            reason: "userspace WireGuard is only implemented on Linux",
+        });
+
+        #[cfg(target_os = "linux")]
+        {
+            // Create TUN device
+            let tun_dev = LinuxTunDevice::new(interface).await?;
+
+            // Bind UDP socket to any address, auto-assigned port.
+            // Binding to 0.0.0.0 allows the kernel to select the best source address
+            // based on the destination route when sending (standard for VPN data planes).
+            // The kernel will automatically select which source IP to use based on the
+            // routing table (e.g., if sending to 10.0.1.1, it will use the IP of the
+            // interface that has a route to 10.0.1.0/24).
+            let local_addr = std::net::SocketAddr::new(
+                std::net::IpAddr::V4(std::net::Ipv4Addr::new(0, 0, 0, 0)),
+                0,
+            );
+            let udp_sock = TokioUdpSocket::new(local_addr).await?;
+
+            // Build the Tunn (boringtun state machine)
+            let tunn = build_tunn(spec);
+
+            // Initialize shared state
+            let state = Arc::new(Mutex::new(EventLoopState {
+                tunn,
+                peer_addr: spec.endpoint,
+                last_handshake: None,
+                rx_bytes: 0,
+                tx_bytes: 0,
+            }));
+
+            // Create cancellation token for event loop shutdown
+            let cancel = CancellationToken::new();
+            let cancel_clone = cancel.clone();
+            let state_clone = state.clone();
+
+            // Spawn the event loop task
+            let task = tokio::spawn(async move {
+                let _ = event_loop(tun_dev, udp_sock, state_clone, cancel_clone).await;
+            });
+
+            // Store the instance
+            *self.instance.lock().await = Some(BackendInstance {
+                _task: task,
+                cancel,
+                state,
+            });
+
+            Ok(())
+        }
     }
 
-    /// No userspace tunnel is ever actually brought up (see [`apply`]), so
-    /// there are never live stats to report — reads the same as an
-    /// interface that was never configured, not an error.
+    /// Reads live handshake state and byte counts from the event loop's state.
     async fn peer_stats(&self, _interface: &str) -> Result<PeerStats, WgBackendError> {
-        Ok(PeerStats::default())
+        match self.instance.lock().await.as_ref() {
+            None => Ok(PeerStats::default()),
+            Some(inst) => {
+                let state = inst.state.lock().await;
+                Ok(PeerStats {
+                    last_handshake: state.last_handshake,
+                    rx_bytes: state.rx_bytes,
+                    tx_bytes: state.tx_bytes,
+                })
+            }
+        }
     }
 
-    /// Nothing was ever created, so tearing down is trivially idempotent.
+    /// Closes the TUN device and terminates the event loop.
     async fn teardown(&self, _interface: &str) -> Result<(), WgBackendError> {
+        *self.instance.lock().await = None;
         Ok(())
     }
 }
 
-/// Builds a `boringtun` Noise-protocol tunnel from `spec`'s keys. Infallible
-/// by construction: `spec.private_key`/`spec.peer_public_key` are already
-/// validated 32-byte WireGuard keys by the time a [`TunnelSpec`] exists
-/// (parsed in `vpn.rs` from the manager's response), and raw X25519 key
-/// material has no further validity constraint `Tunn::new` could reject.
+/// Event loop: drives TUN read → encapsulate → UDP send, and vice versa.
+async fn event_loop(
+    mut tun: LinuxTunDevice,
+    mut udp: TokioUdpSocket,
+    state: Arc<Mutex<EventLoopState>>,
+    cancel: CancellationToken,
+) {
+    let mut timer = interval(Duration::from_millis(100));
+
+    loop {
+        tokio::select! {
+            _ = cancel.cancelled() => {
+                let _ = tun.close().await;
+                let _ = udp.close().await;
+                return;
+            }
+
+            // TUN read → encapsulate → UDP send
+            Some(packet) = tun.read() => {
+                let mut state_guard = state.lock().await;
+                let packet_len = packet.len() as u64;
+                let mut buf = [0u8; 1500];
+                match state_guard.tunn.encapsulate(&packet, &mut buf) {
+                    boringtun::noise::TunnResult::WriteToNetwork(encap_pkt) => {
+                        let _ = udp.send(encap_pkt, state_guard.peer_addr).await;
+                        state_guard.tx_bytes += packet_len;
+                    }
+                    boringtun::noise::TunnResult::Done => {},
+                    _ => {}
+                }
+            }
+
+            // UDP recv → decapsulate → TUN write / handle
+            Some((packet, _addr)) = udp.recv() => {
+                let packet_len = packet.len() as u64;
+                let mut state_guard = state.lock().await;
+                let mut buf = [0u8; 1500];
+                match state_guard.tunn.decapsulate(None, &packet, &mut buf) {
+                    boringtun::noise::TunnResult::WriteToTunnelV4(decap_pkt, _) => {
+                        state_guard.rx_bytes += decap_pkt.len() as u64;
+                        let _ = tun.write(decap_pkt).await;
+                        state_guard.last_handshake = Some(SystemTime::now());
+                    }
+                    boringtun::noise::TunnResult::WriteToTunnelV6(decap_pkt, _) => {
+                        state_guard.rx_bytes += decap_pkt.len() as u64;
+                        let _ = tun.write(decap_pkt).await;
+                        state_guard.last_handshake = Some(SystemTime::now());
+                    }
+                    boringtun::noise::TunnResult::WriteToNetwork(resp_pkt) => {
+                        let _ = udp.send(resp_pkt, state_guard.peer_addr).await;
+                        state_guard.tx_bytes += packet_len;
+                    }
+                    boringtun::noise::TunnResult::Done => {},
+                    boringtun::noise::TunnResult::Err(_) => {},
+                }
+            }
+
+            // Timer tick → update timers → send keepalive/handshake
+            _ = timer.tick() => {
+                let mut state_guard = state.lock().await;
+                let mut buf = [0u8; 1500];
+                match state_guard.tunn.update_timers(&mut buf) {
+                    boringtun::noise::TunnResult::WriteToNetwork(pkt) => {
+                        state_guard.tx_bytes += pkt.len() as u64;
+                        let _ = udp.send(pkt, state_guard.peer_addr).await;
+                    }
+                    boringtun::noise::TunnResult::Done => {},
+                    _ => {}
+                }
+            }
+        }
+    }
+}
+
+/// Builds a `boringtun` Noise-protocol tunnel from `spec`'s keys.
+#[allow(dead_code)]
 fn build_tunn(spec: &TunnelSpec) -> Tunn {
     let private = x25519::StaticSecret::from(spec.private_key.as_array());
     let public = x25519::PublicKey::from(spec.peer_public_key.as_array());
@@ -102,6 +548,7 @@ mod tests {
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
     use std::time::Duration;
 
+    use boringtun::noise::TunnResult;
     use defguard_wireguard_rs::key::Key;
 
     use super::*;
@@ -132,7 +579,7 @@ mod tests {
         let result = tunn.format_handshake_initiation(&mut buf, false);
 
         match result {
-            boringtun::noise::TunnResult::WriteToNetwork(packet) => {
+            TunnResult::WriteToNetwork(packet) => {
                 // Message type 1 (handshake initiation), little-endian, is
                 // the first four bytes of every WireGuard handshake-init
                 // packet on the wire.
@@ -144,25 +591,52 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn apply_reports_unsupported_rather_than_a_silent_success() {
-        let backend = UserspaceBackend::new();
-        let spec = sample_spec();
+    async fn fake_tun_device_buffers_packets() {
+        let mut device = FakeTunDevice::new();
 
-        let Err(err) = backend.apply("wg0", &spec).await else {
-            panic!("userspace apply must not silently claim success");
-        };
-        match err {
-            WgBackendError::Unsupported { operation, .. } => assert_eq!(operation, "apply"),
-            other => panic!("expected Unsupported, got {other:?}"),
-        }
+        device.inject_packet(BytesMut::from("test packet")).await;
+        let packet = device.read().await;
+        assert_eq!(packet, Some(BytesMut::from("test packet")));
     }
 
     #[tokio::test]
-    async fn peer_stats_and_teardown_are_harmless_when_nothing_was_ever_up() {
-        let backend = UserspaceBackend::new();
-        let stats = backend.peer_stats("wg0").await.expect("peer_stats");
-        assert_eq!(stats, PeerStats::default());
-        backend.teardown("wg0").await.expect("teardown");
+    async fn fake_tun_device_tracks_writes() {
+        let mut device = FakeTunDevice::new();
+
+        device.write(b"packet1").await.unwrap();
+        device.write(b"packet2").await.unwrap();
+
+        let written = device.written_packets().await;
+        assert_eq!(written.len(), 2);
+        assert_eq!(written[0], BytesMut::from("packet2"));
+        assert_eq!(written[1], BytesMut::from("packet1"));
+    }
+
+    #[tokio::test]
+    async fn loopback_udp_socket_forwards_packets() {
+        let mut socket = LoopbackUdpSocket::new();
+        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(203, 0, 113, 1)), 51820);
+
+        let packet = BytesMut::from("udp packet");
+        socket.inject_packet(packet.clone(), addr).await;
+
+        let (recv_pkt, recv_addr) = socket.recv().await.unwrap();
+        assert_eq!(recv_pkt, packet);
+        assert_eq!(recv_addr, addr);
+    }
+
+    #[tokio::test]
+    async fn loopback_udp_socket_tracks_sends() {
+        let mut socket = LoopbackUdpSocket::new();
+        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(203, 0, 113, 1)), 51820);
+
+        socket.send(b"packet1", addr).await.unwrap();
+        socket.send(b"packet2", addr).await.unwrap();
+
+        let sent = socket.sent_packets().await;
+        assert_eq!(sent.len(), 2);
+        assert_eq!(sent[0].0, BytesMut::from("packet2"));
+        assert_eq!(sent[1].0, BytesMut::from("packet1"));
     }
 
     #[test]

@@ -3229,9 +3229,11 @@ version = "0.2.0"
 dependencies = [
  "async-trait",
  "boringtun",
+ "bytes",
  "defguard_wireguard_rs",
  "jsonschema",
  "jsonwebtoken",
+ "libc",
  "penguin-sdk",
  "prometheus",
  "reqwest",

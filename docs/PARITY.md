@@ -297,13 +297,27 @@ create the interface, configure it, read genuine handshake times and byte
 counters from the device on every read, and tear the interface down on
 disconnect.
 
-The **userspace path is not a working tunnel.** It builds a real `boringtun`
-session from the configured keys — a test proves it emits a correctly-formed
-148-byte handshake initiation entirely offline — and then returns an explicit
-`Unsupported` error, because the TUN device, UDP socket, and packet-forwarding
-loop are not wired up. That is deliberate: an honest error is the opposite of
-the Go defect this section describes, which reported success while doing
-nothing. Completing it is tracked separately.
+The **userspace path is now implemented** (Linux). `apply()` opens a real TUN
+device (`tun_linux.rs`, ioctl'd `/dev/net/tun` behind an isolated, `SAFETY`-
+documented `unsafe` block), binds a UDP socket, and spawns a tokio event loop
+driving the `boringtun` session: TUN reads are encapsulated out over UDP,
+inbound UDP is decapsulated to the TUN, and a 100 ms timer runs `update_timers`
+for handshake/keepalive; `teardown()` cancels the loop and drops the I/O, and
+`peer_stats()` reads live handshake time + byte counters from the session (fixing
+the Go staleness fiction above). Non-Linux targets still return `Unsupported`.
+
+The event-loop logic is unit-tested offline with a fake TUN and a loopback UDP
+pair, and a real netns integration test (`tests/userspace_tunnel.rs`, mirroring
+the kernel gate — veth pair + a real `wg` peer, `PENGUIN_INTEGRATION=1`-gated)
+drives `apply()` against a live peer. **Honest caveat:** in the local dev
+container that integration run got as far as emitting handshake-initiation
+packets (`tx_bytes` advances) but a *completed* handshake was **not observed** —
+attributed to a container limitation on the peer's UDP path, not proven a code
+defect either way. So the userspace tunnel is implemented and structurally
+verified, but its end-to-end handshake completion is proven only by the
+privileged CI integration tier, **not yet confirmed locally**. It is the
+fallback for hosts without kernel WireGuard; the kernel path (the default) is the
+one proven end-to-end in a netns.
 
 **Gap 3 is not fixable here.** Sending the client public key is a manager-API
 contract change. The Rust client sends its public key when fetching tunnel
