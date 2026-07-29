@@ -12,6 +12,7 @@
 [workspace]
 resolver = "3"
 members = ["crates/*", "bins/*", "examples/plugin-hello-rs"]
+exclude = ["desktop"]
 
 [workspace.package]
 version = "0.2.0"

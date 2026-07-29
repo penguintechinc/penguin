@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Penguin Desktop</title>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial,
+          sans-serif;
+        background: #0f172a;
+        color: #fbbf24;
+      }
+
+      .container {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        height: 100vh;
+        padding: 20px;
+      }
+
+      .card {
+        background: #1e293b;
+        border: 1px solid #334155;
+        border-radius: 8px;
+        padding: 40px;
+        max-width: 500px;
+        text-align: center;
+      }
+
+      h1 {
+        font-size: 32px;
+        margin-bottom: 16px;
+      }
+
+      p {
+        margin-bottom: 24px;
+        color: #f59e0b;
+        line-height: 1.6;
+      }
+
+      .note {
+        background: #0f172a;
+        border-left: 4px solid #0ea5e9;
+        padding: 16px;
+        text-align: left;
+        font-size: 14px;
+        margin-top: 24px;
+        border-radius: 4px;
+      }
+
+      .note strong {
+        display: block;
+        margin-bottom: 8px;
+      }
+
+      code {
+        background: #0f172a;
+        padding: 2px 6px;
+        border-radius: 3px;
+        font-family: monospace;
+        font-size: 12px;
+      }
+    </style>
+  </head>
+
+  <body>
+    <div class="container">
+      <div class="card">
+        <h1>🐧 Penguin Desktop</h1>
+        <p><strong>Phase 2b: Tauri Shell</strong></p>
+        <p>This is the Tauri shell wrapping the penguin-desktop-core. It provides authentication and API proxying for the hub.</p>
+
+        <div class="note">
+          <strong>Phase 3 (Coming):</strong>
+          <p>The published webui will be bundled as the frontend in Phase 3. For now, this placeholder will be replaced with the real React app.</p>
+          <p><code>frontendDist</code> in <code>tauri.conf.json</code> points to where the built frontend will be served.</p>
+        </div>
+
+        <div class="note">
+          <strong>Tauri Commands:</strong>
+          <ul style="margin-top: 8px; margin-left: 20px;">
+            <li><code>login(email, password, hub_url)</code> — Authenticate</li>
+            <li><code>logout()</code> — Sign out</li>
+            <li><code>api_request(method, path, body)</code> — Proxy API calls</li>
+            <li><code>oauth_start(platform, hub_url)</code> — Begin OAuth flow</li>
+            <li><code>oauth_complete(code, state_param, stored_state)</code> — Complete OAuth callback</li>
+          </ul>
+        </div>
+
+        <div class="note">
+          <strong>Deep-Link:</strong>
+          <p>The app listens for <code>waddles://oauth/callback?code=...&state=...</code> to complete OAuth flows via system browser.</p>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>

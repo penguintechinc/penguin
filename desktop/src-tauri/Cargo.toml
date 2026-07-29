@@ -1,0 +1,48 @@
+[package]
+name = "penguin-desktop"
+version = "0.2.0"
+edition = "2021"
+rust-version = "1.97"
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+path = "src/main.rs"
+name = "penguin-desktop"
+
+[build-dependencies]
+tauri-build = "2.0"
+
+[dependencies]
+# Tauri framework and plugins
+tauri = { version = "2.0", features = ["custom-protocol"] }
+tauri-plugin-deep-link = "2.0"
+tauri-plugin-opener = "2.0"
+tauri-plugin-updater = "2.10"
+
+# Core dependencies (penguin-desktop-core provides the Session API)
+penguin-desktop-core = { path = "../../crates/penguin-desktop-core" }
+
+# Serialization and async
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1", features = ["rt", "macros", "sync", "time"] }
+async-trait = "0.1"
+
+# Error handling and logging
+thiserror = "1.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["json", "fmt"] }
+
+# Utilities
+dirs = "5.0"
+
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1
+opt-level = 3
+
+[profile.dev]
+opt-level = 0

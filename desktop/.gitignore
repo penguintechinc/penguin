@@ -1,0 +1,4 @@
+# Frontend build artifacts + deps for the desktop shell.
+node_modules/
+dist/
+.DS_Store
