@@ -55,6 +55,19 @@ use crate::commands;
 use crate::config::ModuleConfig;
 use crate::metrics::WaddlebotMetrics;
 
+/// Global registry for the waddlebot module's session proxy.
+/// Stored here so the daemon service can access it without needing complex downcasting.
+/// This is set during `Module::init` and cleared during unload.
+static SESSION_PROXY_REGISTRY: OnceLock<StdMutex<Option<Arc<crate::session_proxy::SessionProxy>>>> =
+    OnceLock::new();
+
+/// Get or initialize the session proxy registry.
+/// Public so the daemon service can access it.
+pub fn get_session_proxy_registry()
+-> &'static StdMutex<Option<Arc<crate::session_proxy::SessionProxy>>> {
+    SESSION_PROXY_REGISTRY.get_or_init(|| StdMutex::new(None))
+}
+
 /// How long a cached auth probe (shared by [`Module::status`] and
 /// [`Module::health`]) is trusted before a fresh one runs. Matches
 /// `penguin-module-squawk`'s own health-cache TTL.
@@ -119,6 +132,9 @@ struct Inner {
     /// module is started. `None` whenever the bridge is stopped/disabled —
     /// see [`WaddlebotModule::start_bridge`]/[`WaddlebotModule::stop_bridge`].
     bridge: StdMutex<Option<crate::bridge::BridgeHandle>>,
+    /// Desktop client user-session hub proxy (created per-module, not per-community).
+    /// Holds the current user's tokens in-memory, set via SetUserSession RPC.
+    session_proxy: OnceLock<Arc<crate::session_proxy::SessionProxy>>,
 }
 
 impl Inner {
@@ -135,6 +151,7 @@ impl Inner {
             running: AtomicBool::new(false),
             last_probe: StdMutex::new(None),
             bridge: StdMutex::new(None),
+            session_proxy: OnceLock::new(),
         }
     }
 }
@@ -425,6 +442,8 @@ impl Module for WaddlebotModule {
         let metrics = WaddlebotMetrics::register(host.metrics().as_ref())
             .map_err(|err| ModuleError::new(format!("register metrics: {err}")))?;
 
+        let session_proxy = Arc::new(crate::session_proxy::SessionProxy::new());
+
         logger.info(
             "waddlebot module initialized",
             &[
@@ -446,6 +465,11 @@ impl Module for WaddlebotModule {
         let _ = self.inner.host.set(host);
         let _ = self.inner.config.set(cfg);
         let _ = self.inner.metrics.set(metrics);
+        let _ = self.inner.session_proxy.set(session_proxy.clone());
+
+        // Register the session proxy in the global registry so the daemon can access it.
+        let registry = get_session_proxy_registry();
+        *registry.lock().expect("proxy registry mutex poisoned") = Some(session_proxy);
 
         Ok(())
     }

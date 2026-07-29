@@ -1,0 +1,50 @@
+// Desktop client user-session hub proxy service.
+// Separate from daemon.proto to avoid proto-drift conflicts — the daemon.proto
+// must remain byte-identical to the frozen go-client copy per CI's proto-drift gate.
+// This service multiplexes onto the daemon's UDS gRPC server via tonic's service router.
+syntax = "proto3";
+
+package penguin.desktop.v1;
+
+option go_package = "github.com/penguintechinc/penguin/api/proto/penguin/desktop/v1;desktopv1";
+
+service SessionProxy {
+  // api_version is carried in every request per PenguinTech gRPC standards;
+  // unknown versions return UNIMPLEMENTED.
+  rpc ProxyRequest(ProxyHttpRequest) returns (ProxyHttpResponse);
+  rpc SetUserSession(UserSession) returns (SetUserSessionResponse);
+}
+
+/// Generic HTTP proxy for desktop client hub requests.
+message Header {
+  string name = 1;
+  string value = 2;
+}
+
+message ProxyHttpRequest {
+  string api_version = 1;
+  string method = 2; // GET, POST, PUT, DELETE, PATCH, etc.
+  string path = 3;   // /api/v1/... (path only, no host)
+  repeated Header headers = 4; // custom headers (e.g., X-Custom, not Authorization)
+  bytes body = 5;    // request body (empty for GET/DELETE)
+}
+
+message ProxyHttpResponse {
+  string api_version = 1;
+  uint32 status = 2; // HTTP status code (200, 404, 401, etc.)
+  repeated Header headers = 3; // response headers
+  bytes body = 4;    // response body
+}
+
+/// Set the user session for the hub proxy (access+refresh tokens, hub base URL).
+/// Tokens are held in-memory by the module; never persisted daemon-side.
+message UserSession {
+  string api_version = 1;
+  string access_token = 2;   // Bearer token for hub API
+  string refresh_token = 3;  // Optional; used for 401 → refresh → retry
+  string hub_base_url = 4;   // https://... — fixed per session
+}
+
+message SetUserSessionResponse {
+  string api_version = 1;
+}

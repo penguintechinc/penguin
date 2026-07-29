@@ -26,6 +26,15 @@ pub mod sdk {
     }
 }
 
+/// The desktop client session proxy service (`penguin.desktop.v1`) — separate
+/// package to avoid proto-drift conflicts with the frozen daemon.proto.
+pub mod desktop {
+    /// Version 1 of the desktop session proxy contract.
+    pub mod v1 {
+        tonic::include_proto!("penguin.desktop.v1");
+    }
+}
+
 /// The vendored hashicorp/go-plugin v1.7.0 protocol (proto package `plugin`).
 ///
 /// Broker, controller, and stdio — the three services the Rust host must speak

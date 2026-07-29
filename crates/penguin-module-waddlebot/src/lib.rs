@@ -19,7 +19,8 @@ mod config;
 mod mask;
 pub mod metrics;
 mod module;
+pub mod session_proxy;
 #[cfg(test)]
 mod testutil;
 
-pub use module::{WaddlebotModule, factory};
+pub use module::{WaddlebotModule, factory, get_session_proxy_registry};

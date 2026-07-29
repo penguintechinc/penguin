@@ -22,6 +22,8 @@ penguin-telemetry.workspace = true
 # recognise through these two.
 penguin-extplugin.workspace = true
 penguin-goplugin-host.workspace = true
+# waddlebot module: needed for the session proxy registry access in the daemon service.
+penguin-module-waddlebot.workspace = true
 
 tokio.workspace = true
 tokio-stream.workspace = true
@@ -58,5 +60,4 @@ sha2 = "=0.11.0"
 # Metrics parity test: first-party module metrics registration.
 penguin-module-squawk.workspace = true
 penguin-module-tobogganing.workspace = true
-penguin-module-waddlebot.workspace = true
 prometheus.workspace = true

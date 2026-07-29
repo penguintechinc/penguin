@@ -20,6 +20,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let daemon_proto = proto_root.join("penguin/daemon/v1/daemon.proto");
     let module_proto = proto_root.join("penguin/sdk/v1/module.proto");
+    // Desktop client session proxy service — separate package to avoid proto-drift
+    // conflicts with the frozen daemon.proto (kept byte-identical for Go client).
+    let desktop_proxy_proto = proto_root.join("penguin/desktop/v1/proxy.proto");
     // Vendored hashicorp/go-plugin v1.7.0 — the protocol the Rust host must
     // speak so existing Go-built plugin binaries load unchanged.
     let broker_proto = proto_root.join("goplugin/grpc_broker.proto");
@@ -29,6 +32,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let protos = [
         daemon_proto,
         module_proto,
+        desktop_proxy_proto,
         broker_proto,
         controller_proto,
         stdio_proto,

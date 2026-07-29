@@ -251,6 +251,9 @@ serde-norway = { package = "serde_norway", version = "0.9.42" }
 serde_json = "1"
 jsonschema = "=0.47.0"
 
+# Mock HTTP server for testing session proxy's forwarding + refresh flows.
+wiremock = "0.6"
+
 # Deny unsafe workspace-wide; the few legitimate sites (Windows SDDL / named-pipe
 # glue in penguin-ipc) opt back in per-file with an allow + justification.
 [workspace.lints.rust]

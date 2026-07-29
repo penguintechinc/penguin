@@ -41,6 +41,8 @@ use tonic::{Request, Response, Status};
 
 use penguin_proto::daemon::v1 as pb;
 use penguin_proto::daemon::v1::daemon_server::Daemon;
+use penguin_proto::desktop::v1 as pb_desktop;
+use penguin_proto::desktop::v1::session_proxy_server::SessionProxy;
 use penguin_sdk::{CommandSpec, Event, FlagSpec, ModuleState};
 
 use crate::broker::{EventBroker, EventReceiver};
@@ -413,6 +415,93 @@ impl Daemon for DaemonService {
     }
 }
 
+/// Desktop client session proxy service — multiplexed on the same gRPC server
+/// as the main Daemon service. This is a separate service/package to avoid
+/// proto-drift conflicts with the frozen daemon.proto.
+#[derive(Clone)]
+pub struct SessionProxyService {
+    supervisor: Supervisor,
+}
+
+impl SessionProxyService {
+    /// Builds the session proxy service with the same supervisor as the daemon.
+    pub fn new(supervisor: Supervisor) -> SessionProxyService {
+        SessionProxyService { supervisor }
+    }
+}
+
+#[async_trait]
+impl SessionProxy for SessionProxyService {
+    /// Proxies an HTTP request through the waddlebot module's user-session hub proxy.
+    async fn proxy_request(
+        &self,
+        request: Request<pb_desktop::ProxyHttpRequest>,
+    ) -> Result<Response<pb_desktop::ProxyHttpResponse>, Status> {
+        let req = request.into_inner();
+        check_api_version(&req.api_version)?;
+
+        // Convert proto headers to session proxy format.
+        let headers: Vec<(String, String)> =
+            req.headers.into_iter().map(|h| (h.name, h.value)).collect();
+
+        let proxy_req = penguin_module_waddlebot::session_proxy::HttpRequest {
+            method: req.method,
+            path: req.path,
+            headers,
+            body: req.body,
+        };
+
+        // Forward through the supervisor to the waddlebot module.
+        let resp = self
+            .supervisor
+            .proxy_request("waddlebot", proxy_req)
+            .await
+            .map_err(|err| proxy_error_to_status(&err))?;
+
+        // Convert response back to proto format.
+        let proto_headers: Vec<pb_desktop::Header> = resp
+            .headers
+            .into_iter()
+            .map(|(name, value)| pb_desktop::Header { name, value })
+            .collect();
+
+        Ok(Response::new(pb_desktop::ProxyHttpResponse {
+            api_version: "v1".to_string(),
+            status: resp.status as u32,
+            headers: proto_headers,
+            body: resp.body,
+        }))
+    }
+
+    /// Sets the user session (access + refresh tokens, hub base URL) for the
+    /// desktop client's hub proxy.
+    async fn set_user_session(
+        &self,
+        request: Request<pb_desktop::UserSession>,
+    ) -> Result<Response<pb_desktop::SetUserSessionResponse>, Status> {
+        let req = request.into_inner();
+        check_api_version(&req.api_version)?;
+
+        self.supervisor
+            .set_user_session(
+                "waddlebot",
+                req.access_token,
+                if req.refresh_token.is_empty() {
+                    None
+                } else {
+                    Some(req.refresh_token)
+                },
+                req.hub_base_url,
+            )
+            .await
+            .map_err(|err| proxy_error_to_status(&err))?;
+
+        Ok(Response::new(pb_desktop::SetUserSessionResponse {
+            api_version: "v1".to_string(),
+        }))
+    }
+}
+
 /// Validates a request's `api_version` field: empty or `"v1"` is accepted
 /// (empty lets lenient callers omit it); anything else is `UNIMPLEMENTED`,
 /// per the PenguinTech gRPC versioning standard — never silently routed to a
@@ -448,6 +537,26 @@ fn dispatch_error_to_status(name: &str, err: &SupervisorError) -> Status {
         return Status::not_found(format!("module {name:?} not found"));
     }
     Status::internal(format!("dispatch failed: {err}"))
+}
+
+/// Maps a proxy request failure to its gRPC status: module not loaded is
+/// `UNAVAILABLE`; user-session not set is `FAILED_PRECONDITION`; other errors
+/// are `INTERNAL`.
+fn proxy_error_to_status(err: &SupervisorError) -> Status {
+    match err {
+        SupervisorError::NotLoaded(_) => Status::unavailable("waddlebot module not loaded"),
+        SupervisorError::UnknownModule(_) => Status::not_found("waddlebot module not found"),
+        SupervisorError::Module(e) => {
+            // Check if this is a user-session-not-set error.
+            let msg = e.to_string();
+            if msg.contains("no active session") {
+                Status::failed_precondition("user session not set")
+            } else {
+                Status::internal(format!("proxy error: {e}"))
+            }
+        }
+        _ => Status::internal(format!("proxy error: {err}")),
+    }
 }
 
 /// Drains `events` into `tx`, translating to the wire type and applying

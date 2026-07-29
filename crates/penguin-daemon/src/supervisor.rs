@@ -392,6 +392,69 @@ impl Supervisor {
             .map_err(SupervisorError::Module)
     }
 
+    /// Proxy a user-session HTTP request through the waddlebot module.
+    /// This is a desktop client specific operation — only valid when waddlebot
+    /// is loaded.
+    pub async fn proxy_request(
+        &self,
+        module_name: &str,
+        req: penguin_module_waddlebot::session_proxy::HttpRequest,
+    ) -> Result<penguin_module_waddlebot::session_proxy::HttpResponse, SupervisorError> {
+        if module_name != "waddlebot" {
+            return Err(SupervisorError::UnknownModule(module_name.to_string()));
+        }
+
+        let shared = self.inner.shared.read().await;
+        let _loaded = shared
+            .loaded
+            .get("waddlebot")
+            .ok_or_else(|| SupervisorError::NotLoaded("waddlebot".to_string()))?;
+        drop(shared);
+
+        let registry = penguin_module_waddlebot::get_session_proxy_registry();
+        let proxy = registry
+            .lock()
+            .expect("proxy registry poisoned")
+            .clone()
+            .ok_or_else(|| SupervisorError::NotLoaded("waddlebot".to_string()))?;
+
+        proxy
+            .forward_request(req)
+            .await
+            .map_err(|e| SupervisorError::Module(ModuleError::new(e.to_string())))
+    }
+
+    /// Set the user session on the waddlebot module for hub proxy operations.
+    pub async fn set_user_session(
+        &self,
+        module_name: &str,
+        access_token: String,
+        refresh_token: Option<String>,
+        hub_base_url: String,
+    ) -> Result<(), SupervisorError> {
+        if module_name != "waddlebot" {
+            return Err(SupervisorError::UnknownModule(module_name.to_string()));
+        }
+
+        let shared = self.inner.shared.read().await;
+        let _loaded = shared
+            .loaded
+            .get("waddlebot")
+            .ok_or_else(|| SupervisorError::NotLoaded("waddlebot".to_string()))?;
+        drop(shared);
+
+        let registry = penguin_module_waddlebot::get_session_proxy_registry();
+        let proxy = registry
+            .lock()
+            .expect("proxy registry poisoned")
+            .clone()
+            .ok_or_else(|| SupervisorError::NotLoaded("waddlebot".to_string()))?;
+
+        proxy
+            .set_session(access_token, refresh_token, hub_base_url)
+            .map_err(|e| SupervisorError::Module(ModuleError::new(e.to_string())))
+    }
+
     /// Records a crash or unhealthy reading for `name` and either schedules a
     /// backoff restart or, once [`Inner::max_restarts`] is reached, parks the
     /// module in [`ModuleState::Failed`] with no further restart scheduled.
