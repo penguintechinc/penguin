@@ -1,4 +1,7 @@
 # Frontend build artifacts + deps for the desktop shell.
 node_modules/
 dist/
+# Fetched by scripts/fetch-webui.sh (published waddlebot webui dist, or the
+# placeholder fallback) — never committed, see webui.lock.
+frontend/dist/
 .DS_Store

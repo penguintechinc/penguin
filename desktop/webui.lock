@@ -1,0 +1,25 @@
+# Pinned WaddleBot webui `dist` release artifact.
+#
+# Published by penguintechinc/waddlebot's `.github/workflows/publish-webui-dist.yml`
+# (triggered on `release: published`) as two GitHub Release assets on that repo:
+#
+#   waddlebot-webui-<version>.tar.gz          # gzip tarball of the built frontend dist/
+#   waddlebot-webui-<version>.tar.gz.sha256   # sha256 of the tarball above
+#
+# desktop/scripts/fetch-webui.sh reads WEBUI_VERSION + WEBUI_SHA256 from this
+# file, downloads the matching release asset, and HARD FAILS if the
+# downloaded tarball's sha256 does not match WEBUI_SHA256 below — that
+# mismatch is refused, never silently ignored.
+#
+# Format: shell-sourceable KEY="VALUE" pairs, parsed by fetch-webui.sh.
+#
+# TODO: no waddlebot webui release has been published yet. Once the first
+# `waddlebot-webui-<version>.tar.gz` release asset exists on
+# https://github.com/penguintechinc/waddlebot/releases, update both values
+# below to pin it. Until then WEBUI_VERSION stays "UNPUBLISHED" and
+# fetch-webui.sh falls back to the bundled placeholder frontend (with a
+# warning) instead of hard-failing local/dev builds over a release that
+# doesn't exist yet.
+
+WEBUI_VERSION="UNPUBLISHED"
+WEBUI_SHA256="TODO: fill from the first published waddlebot-webui-<version>.tar.gz.sha256 release asset"

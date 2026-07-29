@@ -37,18 +37,32 @@ The Tauri shell wraps `penguin-desktop-core`, providing a native desktop applica
 desktop/
 ├── src-tauri/                    # Rust Tauri app
 │   ├── Cargo.toml
+│   ├── tauri.conf.json          # THE Tauri config Tauri actually reads (deep-link
+│   │                            # scheme, CSP, bundler, frontendDist, beforeBuildCommand)
 │   ├── src/
 │   │   ├── main.rs              # Tauri app init, deep-link handler
 │   │   ├── commands.rs          # Tauri command wrappers (login, api_request, oauth_*)
 │   │   ├── error.rs             # DesktopError → String conversion
 │   │   └── lib.rs               # Library exports
 │   └── build.rs                 # Tauri build script (generated)
-├── package.json                 # Node dependencies (React, Tauri CLI, Vite)
-├── tauri.conf.json              # Tauri config (deep-link scheme, CSP, bundler)
-├── index.html                   # Placeholder frontend (Phase 3 replaces this)
+├── frontend/dist/                # gitignored — fetched by scripts/fetch-webui.sh
+│                                  # (this is `frontendDist` in src-tauri/tauri.conf.json)
+├── scripts/
+│   └── fetch-webui.sh            # Downloads + sha256-verifies the published waddlebot
+│                                  # webui dist (see webui.lock); dev/offline fallback
+│                                  # copies index.html as a placeholder instead
+├── webui.lock                    # Pins the exact webui version + sha256 to fetch
+├── package.json                  # Node dependencies (React, Tauri CLI, Vite)
+├── index.html                    # Placeholder frontend; also fetch-webui.sh's
+│                                  # offline/no-release-yet fallback content
 ├── Dockerfile                   # Build environment with webkit2gtk, Rust, Node
 └── README.md                    # This file
 ```
+
+**Note:** there is deliberately no `tauri.conf.json` at the top level of
+`desktop/` — Tauri resolves its config relative to the Rust crate
+(`src-tauri/Cargo.toml`'s `build.rs` calls `tauri_build::build()`, which reads
+`src-tauri/tauri.conf.json`), so that's the only copy that exists.
 
 ## Tauri Commands
 
@@ -100,15 +114,41 @@ The Tauri deep-link handler:
 2. Emits an `oauth-callback` event to the frontend with `{code, state}`
 3. Frontend calls `oauth_complete()` with the callback parameters
 
-## Frontend (Phase 3 Placeholder)
+## Frontend (Phase 3: Published WebUI Dist)
 
-`index.html` is a placeholder. Phase 3 will:
+The desktop shell bundles the same React SPA published by
+`penguintechinc/waddlebot`'s `publish-webui-dist` CI workflow, fetched and
+verified by `scripts/fetch-webui.sh`:
 
-1. Build the published webui React distribution
-2. Point `frontendDist` in `tauri.conf.json` to the built output
-3. Wire the frontend to call Tauri commands for auth/API
+1. `webui.lock` pins an exact webui `version` + `sha256`.
+2. `scripts/fetch-webui.sh` runs automatically before every `tauri build`
+   (wired as `beforeBuildCommand` in `src-tauri/tauri.conf.json`). It
+   downloads `waddlebot-webui-<version>.tar.gz` + `.tar.gz.sha256` from the
+   matching GitHub Release on `penguintechinc/waddlebot`, verifies the
+   tarball's sha256 against the pin, and extracts it into `frontend/dist/`
+   (gitignored — never committed).
+3. `frontendDist` in `src-tauri/tauri.conf.json` points at `../frontend/dist`.
 
-For now, the placeholder shows the available commands and explains the architecture.
+**Integrity gate:** a sha256 mismatch is a hard failure — the script refuses
+to bundle a tampered or corrupted artifact, full stop.
+
+**Dev/offline fallback:** if `webui.lock` still has the placeholder version
+(no webui release published yet) or the download fails (offline, no
+network), `fetch-webui.sh` instead copies the bundled placeholder
+`index.html` into `frontend/dist/` and prints a WARNING. This keeps local
+and CI builds working before the first webui release exists — it is
+**not** the same thing as a checksum mismatch, which always hard-fails.
+
+For local testing against a webui build you haven't published yet, point
+the script at a local tarball instead of downloading:
+
+```bash
+WEBUI_LOCAL_TARBALL=/path/to/waddlebot-webui-0.0.0-test.tar.gz \
+  bash scripts/fetch-webui.sh
+```
+
+(still verified against the `WEBUI_SHA256` pin in `webui.lock` — update the
+lock to match your local tarball's sha256 first.)
 
 ## Building
 
@@ -119,6 +159,10 @@ cd desktop
 npm install
 cargo tauri build
 ```
+
+`npm run build` (which `cargo tauri build` invokes under the hood) runs
+`scripts/fetch-webui.sh` first via `beforeBuildCommand`, so the frontend
+dist is fetched/verified automatically — no separate manual step.
 
 ### Docker (full build environment)
 
@@ -171,8 +215,12 @@ The Tauri app has its own `Cargo.lock`, which must be committed.
 
 ## Known Placeholders
 
-- `frontendDist` in `tauri.conf.json` — will point to Phase 3 React build output
-- `index.html` — placeholder; replaced by Phase 3 webui
+- `webui.lock` — pinned to a placeholder `WEBUI_VERSION` until the first
+  `waddlebot-webui-<version>.tar.gz` is published; update it to the real
+  version + sha256 once that release exists (see `scripts/fetch-webui.sh`)
+- `index.html` — placeholder; used as the frontend until `webui.lock` is
+  pinned to a real release, and as `fetch-webui.sh`'s offline/no-release
+  fallback content even after that
 - OAuth callback token exchange — currently expects the hub to return a JWT in the deep-link; verify actual hub callback format
 
 ## Architecture Notes

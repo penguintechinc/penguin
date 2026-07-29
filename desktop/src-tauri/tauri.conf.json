@@ -4,8 +4,9 @@
   "identifier": "io.penguintech.penguin.desktop",
   "build": {
     "beforeDevCommand": "echo 'Phase 3: frontend build will go here'",
-    "beforeBuildCommand": "echo 'Phase 3: frontend build will go here'",
-    "devUrl": "http://localhost:5173"
+    "beforeBuildCommand": "bash scripts/fetch-webui.sh",
+    "devUrl": "http://localhost:5173",
+    "frontendDist": "../frontend/dist"
   },
   "app": {
     "windows": [

@@ -10,8 +10,12 @@ WORKDIR /app
 # - rust toolchain build deps
 # - pkg-config, cmake for build configuration
 # - xvfb for headless testing (optional)
+# - ca-certificates: TLS roots for `curl`, needed by scripts/fetch-webui.sh
+#   (invoked automatically via tauri.conf.json's beforeBuildCommand) to fetch
+#   the published waddlebot webui dist over HTTPS
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
+    ca-certificates \
     cargo \
     cmake \
     curl \
@@ -29,6 +33,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Note: Node.js for frontend build is optional; Tauri Rust layer can build without it.
 # The frontend (index.html + package.json) will be built separately if needed.
+# scripts/fetch-webui.sh runs automatically as part of `cargo tauri build` /
+# `npm run build` (Tauri's beforeBuildCommand) and needs the `curl` + `tar`
+# already present in this image; it prefers `gh` if present but falls back to
+# a plain HTTPS `curl` against public GitHub Release assets, which needs no
+# authentication for this public repo.
 
 # Verify Rust/cargo installation
 RUN rustc --version && cargo --version
