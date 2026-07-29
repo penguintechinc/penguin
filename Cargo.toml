@@ -47,6 +47,10 @@ penguin-module-squawk = { path = "crates/penguin-module-squawk" }
 penguin-module-tobogganing = { path = "crates/penguin-module-tobogganing" }
 # The pure tray menu model, consumed by the penguin-tray platform shells (M7.3).
 penguin-tray-model = { path = "crates/penguin-tray-model" }
+# Desktop client (Phase 2a): IPC wrapper + keychain + OAuth glue for the Tauri shell.
+penguin-desktop-core = { path = "crates/penguin-desktop-core" }
+# OS keychain backend for desktop client session tokens.
+penguin-secrets = { path = "crates/penguin-secrets" }
 
 # gRPC / protobuf. Wire-compatibility with the Go daemon and go-plugin is the
 # whole point of the rewrite, so these are pinned exactly.
@@ -221,7 +225,9 @@ boringtun = "0.7.1"
 # Reading a JWT's expiry WITHOUT verifying its signature: the token is issued to
 # us and stored by us, so we are reading our own claim to schedule a refresh,
 # not authenticating anything.
-jsonwebtoken = "10.4.0"
+jsonwebtoken = { version = "10.4.0", features = ["aws_lc_rs"] }
+# URL encoding for OAuth state parameters and callback URLs.
+urlencoding = "2"
 
 # DNS message encode/decode for the :53 forwarder. The DoH client itself speaks
 # JSON REST (not RFC 8484 binary), so this is only needed on the local side

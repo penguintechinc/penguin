@@ -69,7 +69,14 @@ COVER_EXCLUDE_ALWAYS := (crates/penguin-proto/|bins/|examples/|/tests/)
 # unit tier and are fully tested there. The one pure branch left in
 # updater.rs itself (apply()'s no-verification-key fail-closed short-circuit,
 # which runs before any network call) is still unit-tested in this file.
-COVER_EXCLUDE_BOUNDARY := (penguin-ipc/src/(listen|dial)_(unix|windows)\.rs|penguin-ipc/src/groups_unix\.rs|penguin-goplugin-host/src/(client|broker|stdio|controller)\.rs|penguin-sdk/src/plugin/(serve|broker|hostservices|services|tls_incoming)\.rs|penguin-module-tobogganing/src/wireguard/kernel\.rs|penguin-module-tobogganing/src/testutil\.rs|penguin-secrets/src/platform_backend\.rs|penguin-update/src/updater\.rs)
+#
+# penguin-desktop-core/src/ipc_dial.rs is the platform-specific socket dial
+# wrapper (Unix UDS, Windows named pipe). Unit tests cannot spawn a real penguind
+# daemon, so the dial call cannot be exercised in the unit tier. The connect flow
+# that calls dial_unix is exercised for real in integration tests that do have a
+# real daemon. Excluding this boundary file allows the crate's real logic
+# (proxy_request, set_user_session, oauth, token_store) to stay in the unit tier.
+COVER_EXCLUDE_BOUNDARY := (penguin-ipc/src/(listen|dial)_(unix|windows)\.rs|penguin-ipc/src/groups_unix\.rs|penguin-goplugin-host/src/(client|broker|stdio|controller)\.rs|penguin-sdk/src/plugin/(serve|broker|hostservices|services|tls_incoming)\.rs|penguin-module-tobogganing/src/wireguard/kernel\.rs|penguin-module-tobogganing/src/testutil\.rs|penguin-secrets/src/platform_backend\.rs|penguin-update/src/updater\.rs|penguin-desktop-core/src/ipc_dial\.rs)
 
 COVER_IGNORE_UNIT := $(COVER_EXCLUDE_ALWAYS)|$(COVER_EXCLUDE_BOUNDARY)
 COVER_IGNORE_INT := $(COVER_EXCLUDE_ALWAYS)
