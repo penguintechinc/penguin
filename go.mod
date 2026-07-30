@@ -15,7 +15,7 @@ require (
 	github.com/Microsoft/go-winio v0.6.2
 	github.com/golang-jwt/jwt/v5 v5.2.2
 	github.com/hashicorp/go-plugin v1.7.0
-	github.com/kardianos/service v1.2.2
+	github.com/kardianos/service v1.3.0
 	github.com/minio/selfupdate v0.6.0
 	github.com/penguintechinc/squawk/squawk-client-go v0.0.0-20260710184153-35ceb9b18f74
 	github.com/prometheus/client_golang v1.22.0
