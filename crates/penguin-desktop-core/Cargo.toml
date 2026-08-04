@@ -6,14 +6,18 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
 penguin-proto.workspace = true
 penguin-ipc.workspace = true
 penguin-telemetry.workspace = true
 penguin-secrets.workspace = true
 penguin-sdk.workspace = true
+penguin-extplugin.workspace = true
 
-tokio = { workspace = true, features = ["sync", "time", "net"] }
+tokio = { workspace = true, features = ["sync", "time", "net", "process", "rt"] }
 tokio-stream.workspace = true
 tokio-util.workspace = true
 async-trait.workspace = true
@@ -29,6 +33,12 @@ base64-url = "2"
 subtle = "2"
 getrandom = "0.2"
 futures = "0.3.33"
+uuid = { version = "1", features = ["v4", "serde"] }
+mlua = { version = "0.9", features = ["lua54", "serialize", "vendored"] }
+base64 = { version = "0.22", features = ["std"] }
+tempfile = "3"
+chrono = { version = "0.4", features = ["serde"] }
+nix.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt"] }

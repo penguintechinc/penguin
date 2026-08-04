@@ -19,6 +19,7 @@
 //! - `Session::logout()` — clear keychain + penduind session
 //! - `Session::watch_token_rotations()` — subscribe to `WatchEvents` for keychain re-persist
 
+pub mod action_executor;
 pub mod error;
 pub mod ipc_client;
 mod ipc_dial;

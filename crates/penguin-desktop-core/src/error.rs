@@ -5,6 +5,13 @@ use thiserror::Error;
 /// Errors from desktop-core operations (session, keychain, OAuth, IPC).
 #[derive(Error, Debug)]
 pub enum DesktopError {
+    /// Lua execution or configuration error.
+    #[error("Lua error: {0}")]
+    LuaError(String),
+
+    /// JSON serialization/deserialization error.
+    #[error("JSON error: {0}")]
+    JsonError(String),
     /// IPC connection to penguind failed.
     #[error("IPC connection failed: {0}")]
     IpcConnection(String),
@@ -74,7 +81,21 @@ impl DesktopError {
             }
             DesktopError::GrpcError(msg) => format!("gRPC error: {}", mask_sensitive(msg)),
             DesktopError::Internal(msg) => format!("internal error: {}", mask_sensitive(msg)),
+            DesktopError::LuaError(msg) => format!("Lua error: {}", mask_sensitive(msg)),
+            DesktopError::JsonError(msg) => format!("JSON error: {}", mask_sensitive(msg)),
         }
+    }
+}
+
+impl From<mlua::Error> for DesktopError {
+    fn from(err: mlua::Error) -> Self {
+        DesktopError::LuaError(err.to_string())
+    }
+}
+
+impl From<serde_json::Error> for DesktopError {
+    fn from(err: serde_json::Error) -> Self {
+        DesktopError::JsonError(err.to_string())
     }
 }
 
