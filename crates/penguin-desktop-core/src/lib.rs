@@ -29,6 +29,9 @@ pub mod token_store;
 #[cfg(test)]
 mod mock_server;
 
+pub use action_executor::{
+    ActionExecutor, ApprovalDecision, ApprovalPrompt, PendingAction, run_poll_loop,
+};
 pub use error::{DesktopError, Result};
 pub use ipc_client::{ApiRequest, ApiResponse, Header, IpcClient};
 pub use oauth::{CallbackParams, OAuthContext, OAuthPlatform, OAuthTokens};
@@ -244,6 +247,14 @@ impl Session {
         info!("logout successful");
         Ok(())
     }
+
+    /// Checks whether an existing session is stored in the keychain.
+    ///
+    /// Returns true if a valid access token and hub URL exist, false otherwise.
+    /// This is used at startup to determine whether to auto-resume the poll loop.
+    pub async fn has_existing_session(&self) -> bool {
+        self.token_store.has_session().await
+    }
 }
 
 #[cfg(test)]
@@ -324,6 +335,25 @@ mod tests {
         assert_eq!(resp.status, 200);
         assert_eq!(resp.headers.len(), 1);
         assert_eq!(resp.body, vec![1, 2, 3]);
+    }
+
+    #[tokio::test]
+    async fn test_has_existing_session_when_empty() {
+        use tempfile::tempdir;
+        let temp_dir = tempdir().expect("failed to create temp dir");
+        let token_store = TokenStore::new_file_only(temp_dir.path().to_path_buf())
+            .expect("failed to create test token store");
+
+        // No session stored yet.
+        assert!(!token_store.has_session().await);
+
+        // Store a session and verify has_session returns true
+        let stored = StoredSession::new("test_token", None, "https://example.com");
+        token_store
+            .store(&stored)
+            .await
+            .expect("failed to store session");
+        assert!(token_store.has_session().await);
     }
 
     // Integration tests using mock SessionProxy server

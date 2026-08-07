@@ -20,6 +20,7 @@ pub mod signed;
 
 use penguin_sdk::SecretStore;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, warn};
@@ -133,16 +134,19 @@ pub struct ActionResult {
 }
 
 /// Driver for the poll→verify/approve→execute→respond loop.
-/// Holds the session, machine ID, and approval-prompt provider.
+/// Holds a shared session (Arc<Mutex<Session>>), machine ID, and approval-prompt provider.
 pub struct ActionExecutor {
-    session: Session,
+    session: Arc<tokio::sync::Mutex<Session>>,
     machine_id: MachineId,
     approval_prompt: Box<dyn ApprovalPrompt>,
 }
 
 impl ActionExecutor {
-    /// Creates a new executor with a session and an approval-prompt provider.
-    pub async fn new(session: Session, approval_prompt: Box<dyn ApprovalPrompt>) -> Result<Self> {
+    /// Creates a new executor with a shared session and an approval-prompt provider.
+    pub async fn new(
+        session: Arc<tokio::sync::Mutex<Session>>,
+        approval_prompt: Box<dyn ApprovalPrompt>,
+    ) -> Result<Self> {
         let machine_id = MachineId::load_or_create().await?;
         Ok(ActionExecutor {
             session,
@@ -163,6 +167,8 @@ impl ActionExecutor {
 
         let _resp = self
             .session
+            .lock()
+            .await
             .api_request("POST", "/api/v1/bridge/register", Some(body_bytes))
             .await?;
 
@@ -180,6 +186,8 @@ impl ActionExecutor {
 
         let _resp = self
             .session
+            .lock()
+            .await
             .api_request("POST", "/api/v1/bridge/heartbeat", Some(body_bytes))
             .await?;
 
@@ -197,6 +205,8 @@ impl ActionExecutor {
 
         let _resp = self
             .session
+            .lock()
+            .await
             .api_request("POST", "/api/v1/bridge/unregister", Some(body_bytes))
             .await?;
 
@@ -208,6 +218,8 @@ impl ActionExecutor {
     pub async fn poll(&mut self) -> Result<PollResponse> {
         let resp = self
             .session
+            .lock()
+            .await
             .api_request(
                 "GET",
                 &format!("/api/v1/bridge/poll?bridge_id={}", self.machine_id.as_str()),
@@ -236,6 +248,8 @@ impl ActionExecutor {
 
         let _resp = self
             .session
+            .lock()
+            .await
             .api_request("POST", "/api/v1/bridge/response", Some(body_bytes))
             .await?;
 
@@ -266,7 +280,8 @@ impl ActionExecutor {
     async fn execute_signed_binary(&mut self, action: &ActionRequest) -> ActionResponse {
         let start = std::time::Instant::now();
 
-        match SignedExecutor::execute(&self.session, action, self.machine_id.as_str()).await {
+        let session = self.session.lock().await;
+        match SignedExecutor::execute(&session, action, self.machine_id.as_str()).await {
             Ok((exit_code, stdout, stderr)) => {
                 self.audit_log_execution(&action.id, "signed_binary", exit_code, &stdout, &stderr);
 
@@ -442,9 +457,10 @@ impl ActionExecutor {
 }
 
 /// Drives the full poll→execute→respond loop for a configurable duration or until cancellation.
+/// Takes ownership of the executor so it can be spawned as a background task.
 /// Returns the number of actions processed.
 pub async fn run_poll_loop(
-    executor: &mut ActionExecutor,
+    mut executor: ActionExecutor,
     poll_interval: Duration,
     shutdown: CancellationToken,
 ) -> Result<u64> {
@@ -548,21 +564,19 @@ mod tests {
     fn test_poll_response_structure() {
         // Test PollResponse deserialization
         let poll_resp = PollResponse {
-            actions: vec![
-                ActionRequest {
-                    id: "act_1".to_string(),
-                    r#type: "bash".to_string(),
-                    module_name: None,
-                    action: None,
-                    parameters: serde_json::json!({}),
-                    user_id: "user1".to_string(),
-                    community_id: "comm1".to_string(),
-                    priority: 0,
-                    timeout: 30,
-                    created_at: "2025-01-01T00:00:00Z".to_string(),
-                    expires_at: "2025-01-01T00:05:00Z".to_string(),
-                },
-            ],
+            actions: vec![ActionRequest {
+                id: "act_1".to_string(),
+                r#type: "bash".to_string(),
+                module_name: None,
+                action: None,
+                parameters: serde_json::json!({}),
+                user_id: "user1".to_string(),
+                community_id: "comm1".to_string(),
+                priority: 0,
+                timeout: 30,
+                created_at: "2025-01-01T00:00:00Z".to_string(),
+                expires_at: "2025-01-01T00:05:00Z".to_string(),
+            }],
             next_poll: "2025-01-01T00:01:00Z".to_string(),
             server_time: "2025-01-01T00:00:30Z".to_string(),
             has_more: false,

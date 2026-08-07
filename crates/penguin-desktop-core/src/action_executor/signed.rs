@@ -410,7 +410,10 @@ mod tests {
         assert!(action.parameters.get("binary").is_some());
         assert!(action.parameters.get("manifest").is_some());
         let manifest = action.parameters.get("manifest").unwrap();
-        assert_eq!(manifest.get("name").unwrap().as_str().unwrap(), "test-plugin");
+        assert_eq!(
+            manifest.get("name").unwrap().as_str().unwrap(),
+            "test-plugin"
+        );
         assert_eq!(manifest.get("version").unwrap().as_str().unwrap(), "1.0.0");
     }
 }
