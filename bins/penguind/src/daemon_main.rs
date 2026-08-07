@@ -30,12 +30,15 @@ use penguin_ipc::listen_unix::{self, ListenerConfig, PeerAuthInterceptor};
 use penguin_ipc::{GroupResolver, IpcError};
 use penguin_licensing::{LicenseClient, LicenseClientOptions};
 use penguin_proto::daemon::v1::daemon_server::DaemonServer;
+use penguin_proto::desktop::v1::bridge_action_proxy_server::BridgeActionProxyServer;
+use penguin_proto::desktop::v1::session_proxy_server::SessionProxyServer;
 use penguin_sdk::{EventSink, LicenseChecker, SecretError};
 use penguin_secrets::{Backend as SecretsBackend, Config as SecretsConfig, Store as SecretsStore};
 use penguin_telemetry::{Telemetry, TelemetryError};
 
 use crate::host_wiring::SecretsStoreProvider;
 use crate::{VERSION, logging};
+use penguin_daemon::service::{BridgeActionProxyService, SessionProxyService};
 
 /// Log lines retained per source (a module name, or `""` for the daemon
 /// itself) before the oldest are evicted. Generous but arbitrary — nothing
@@ -318,11 +321,25 @@ async fn run_daemon() -> Result<(), DaemonBinError> {
         .await;
 
     let daemon_svc = InterceptedService::new(DaemonServer::new(daemon_service), peer_auth.clone());
-    let health_svc = InterceptedService::new(health_service, peer_auth);
+    let health_svc = InterceptedService::new(health_service, peer_auth.clone());
+
+    // Register the session proxy service (Phase 4a/4b poll loop support).
+    let session_proxy_svc = InterceptedService::new(
+        SessionProxyServer::new(SessionProxyService::new(supervisor.clone())),
+        peer_auth.clone(),
+    );
+
+    // Register the bridge action proxy service (Phase 4c OBS/webhook dispatch).
+    let bridge_action_svc = InterceptedService::new(
+        BridgeActionProxyServer::new(BridgeActionProxyService::new(supervisor.clone())),
+        peer_auth,
+    );
 
     let serve_result = Server::builder()
         .add_service(daemon_svc)
         .add_service(health_svc)
+        .add_service(session_proxy_svc)
+        .add_service(bridge_action_svc)
         .serve_with_incoming_shutdown(incoming, wait_for_shutdown_signal())
         .await;
 

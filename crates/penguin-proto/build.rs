@@ -43,7 +43,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("cargo:rerun-if-changed={}", proto.display());
     }
 
-    let include_dirs = [proto_root];
+    // Add both the local proto root and the standard google protobuf includes
+    let mut include_dirs = vec![proto_root];
+
+    // Add google protobuf standard includes (from grpc-tools or system install)
+    if let Ok(home) = std::env::var("HOME") {
+        let grpc_tools_path =
+            PathBuf::from(home).join(".local/lib/python3.12/site-packages/grpc_tools/_proto");
+        if grpc_tools_path.exists() {
+            include_dirs.push(grpc_tools_path);
+        }
+    }
 
     tonic_prost_build::configure()
         .build_client(true)

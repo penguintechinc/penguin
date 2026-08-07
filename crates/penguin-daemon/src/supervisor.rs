@@ -455,6 +455,37 @@ impl Supervisor {
             .map_err(|e| SupervisorError::Module(ModuleError::new(e.to_string())))
     }
 
+    /// Execute a bridge action (OBS command or webhook) through the waddlebot module.
+    pub async fn execute_bridge_action(
+        &self,
+        module_name: &str,
+        req: penguin_module_waddlebot::bridge_action::BridgeActionRequest,
+    ) -> Result<penguin_module_waddlebot::bridge_action::BridgeActionResponse, SupervisorError>
+    {
+        if module_name != "waddlebot" {
+            return Err(SupervisorError::UnknownModule(module_name.to_string()));
+        }
+
+        let shared = self.inner.shared.read().await;
+        let _loaded = shared
+            .loaded
+            .get("waddlebot")
+            .ok_or_else(|| SupervisorError::NotLoaded("waddlebot".to_string()))?;
+        drop(shared);
+
+        let registry = penguin_module_waddlebot::get_bridge_action_registry();
+        let executor = registry
+            .lock()
+            .expect("bridge action registry poisoned")
+            .clone()
+            .ok_or_else(|| SupervisorError::NotLoaded("waddlebot".to_string()))?;
+
+        executor
+            .execute(req)
+            .await
+            .map_err(|e| SupervisorError::Module(ModuleError::new(e.to_string())))
+    }
+
     /// Records a crash or unhealthy reading for `name` and either schedules a
     /// backoff restart or, once [`Inner::max_restarts`] is reached, parks the
     /// module in [`ModuleState::Failed`] with no further restart scheduled.

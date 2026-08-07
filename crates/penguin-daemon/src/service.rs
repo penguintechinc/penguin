@@ -42,6 +42,7 @@ use tonic::{Request, Response, Status};
 use penguin_proto::daemon::v1 as pb;
 use penguin_proto::daemon::v1::daemon_server::Daemon;
 use penguin_proto::desktop::v1 as pb_desktop;
+use penguin_proto::desktop::v1::bridge_action_proxy_server::BridgeActionProxy;
 use penguin_proto::desktop::v1::session_proxy_server::SessionProxy;
 use penguin_sdk::{CommandSpec, Event, FlagSpec, ModuleState};
 
@@ -502,6 +503,41 @@ impl SessionProxy for SessionProxyService {
     }
 }
 
+/// Bridge action proxy service — dispatches pre-authorized OBS commands and webhooks
+/// from the desktop client through the waddlebot module.
+#[derive(Clone)]
+pub struct BridgeActionProxyService {
+    supervisor: Supervisor,
+}
+
+impl BridgeActionProxyService {
+    /// Builds the bridge action proxy service with the same supervisor as the daemon.
+    pub fn new(supervisor: Supervisor) -> BridgeActionProxyService {
+        BridgeActionProxyService { supervisor }
+    }
+}
+
+#[async_trait]
+impl BridgeActionProxy for BridgeActionProxyService {
+    /// Executes a bridge action (OBS command or webhook) through the waddlebot module.
+    async fn execute_bridge_action(
+        &self,
+        request: Request<pb_desktop::BridgeActionRequest>,
+    ) -> Result<Response<pb_desktop::BridgeActionResponse>, Status> {
+        let req = request.into_inner();
+        check_api_version(&req.api_version)?;
+
+        let module_name = req.module_name.clone();
+        let result = self
+            .supervisor
+            .execute_bridge_action(&module_name, req.into())
+            .await
+            .map_err(|err| bridge_action_error_to_status(&err))?;
+
+        Ok(Response::new(result.into()))
+    }
+}
+
 /// Validates a request's `api_version` field: empty or `"v1"` is accepted
 /// (empty lets lenient callers omit it); anything else is `UNIMPLEMENTED`,
 /// per the PenguinTech gRPC versioning standard — never silently routed to a
@@ -556,6 +592,17 @@ fn proxy_error_to_status(err: &SupervisorError) -> Status {
             }
         }
         _ => Status::internal(format!("proxy error: {err}")),
+    }
+}
+
+/// Maps a bridge action failure to its gRPC status: module not loaded is
+/// `UNAVAILABLE`; other module errors are `INTERNAL`.
+fn bridge_action_error_to_status(err: &SupervisorError) -> Status {
+    match err {
+        SupervisorError::NotLoaded(_) => Status::unavailable("waddlebot module not loaded"),
+        SupervisorError::UnknownModule(_) => Status::not_found("waddlebot module not found"),
+        SupervisorError::Module(e) => Status::internal(format!("bridge action error: {e}")),
+        _ => Status::internal(format!("bridge action error: {err}")),
     }
 }
 

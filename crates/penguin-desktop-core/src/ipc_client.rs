@@ -13,8 +13,11 @@ use tracing::{debug, info};
 
 use penguin_proto::daemon::v1::VersionRequest;
 use penguin_proto::daemon::v1::daemon_client::DaemonClient;
+use penguin_proto::desktop::v1::bridge_action_proxy_client::BridgeActionProxyClient;
 use penguin_proto::desktop::v1::session_proxy_client::SessionProxyClient;
-use penguin_proto::desktop::v1::{Header as ProtoHeader, ProxyHttpRequest, UserSession};
+use penguin_proto::desktop::v1::{
+    BridgeActionRequest, BridgeActionResponse, Header as ProtoHeader, ProxyHttpRequest, UserSession,
+};
 
 use crate::error::{DesktopError, Result};
 use crate::ipc_dial::dial_unix;
@@ -58,6 +61,7 @@ pub struct ApiResponse {
 /// API requests and session commands.
 pub struct IpcClient {
     session_client: SessionProxyClient<Channel>,
+    bridge_action_client: BridgeActionProxyClient<Channel>,
 }
 
 impl IpcClient {
@@ -117,8 +121,12 @@ impl IpcClient {
         }
 
         let session_client = SessionProxyClient::new(channel.clone());
+        let bridge_action_client = BridgeActionProxyClient::new(channel.clone());
 
-        Ok(IpcClient { session_client })
+        Ok(IpcClient {
+            session_client,
+            bridge_action_client,
+        })
     }
 
     /// Forwards an HTTP request to the hub via penguind's ProxyRequest RPC.
@@ -194,6 +202,43 @@ impl IpcClient {
 
         debug!("user session primed in penguind");
         Ok(())
+    }
+
+    /// Executes a pre-authorized bridge action (OBS command or webhook) via penguind.
+    ///
+    /// This is the thin RPC wrapper for the ActionExecutor's pre-authorized tier.
+    /// The request is forwarded to the daemon's BridgeActionProxy service, which
+    /// validates allowlists and dispatches to the appropriate adapter.
+    pub async fn execute_bridge_action(
+        &mut self,
+        module_name: String,
+        action_type: String,
+        obs_request_type: String,
+        obs_request_data: Vec<u8>,
+        webhook_name: String,
+        webhook_payload: Vec<u8>,
+    ) -> Result<BridgeActionResponse> {
+        let proto_req = BridgeActionRequest {
+            api_version: API_VERSION.to_string(),
+            module_name,
+            action_type,
+            obs_request_type,
+            obs_request_data,
+            webhook_name,
+            webhook_payload,
+        };
+
+        let resp = self
+            .bridge_action_client
+            .execute_bridge_action(proto_req)
+            .await
+            .map_err(|e| {
+                debug!("ExecuteBridgeAction RPC failed: {}", e);
+                DesktopError::GrpcError(format!("ExecuteBridgeAction failed: {}", e))
+            })?
+            .into_inner();
+
+        Ok(resp)
     }
 }
 

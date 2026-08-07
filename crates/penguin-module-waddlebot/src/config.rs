@@ -13,6 +13,7 @@
 //! [`crate::WaddlebotModule::start_bridge`]'s doc for the seam.
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 /// waddlebot's full on-disk config shape, validated by the daemon against
 /// [`CONFIG_SCHEMA`] before [`crate::WaddlebotModule::init`] ever reads it.
@@ -55,6 +56,7 @@ pub struct BridgeSection {
     pub listen_unix: String,
     pub allowed_integrations: Vec<String>,
     pub obs: ObsSection,
+    pub webhooks: HashMap<String, WebhookTarget>,
 }
 
 /// OBS WebSocket adapter configuration for the bridge.
@@ -67,6 +69,12 @@ pub struct ObsSection {
     pub url: String,
     /// The secret key name in the secrets store for the OBS password.
     pub secret_key: String,
+    /// Allowlist of obs-websocket v5 requestType values permitted for remote dispatch.
+    /// Empty = OBS command-out fully disabled, even if enabled=true.
+    pub allowed_commands: Vec<String>,
+    /// Allowlist of scene names permitted for SetCurrentProgramScene.
+    /// Empty = any scene name accepted (if SetCurrentProgramScene is in allowed_commands).
+    pub allowed_scenes: Vec<String>,
 }
 
 impl Default for ObsSection {
@@ -75,6 +83,31 @@ impl Default for ObsSection {
             enabled: false,
             url: String::new(),
             secret_key: "obs_password".to_string(),
+            allowed_commands: Vec::new(),
+            allowed_scenes: Vec::new(),
+        }
+    }
+}
+
+/// Webhook target configuration — operator-defined dispatch targets.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(default)]
+pub struct WebhookTarget {
+    /// The HTTP URL to POST to; never sent by the hub, operator-only.
+    pub url: String,
+    /// Request timeout in seconds; clamped to 30s hard ceiling.
+    pub timeout_secs: u32,
+    /// Optional secret store key for Bearer token auth.
+    /// Empty = no auth header. Never inlined in config, always resolved at dispatch time.
+    pub auth_secret_key: String,
+}
+
+impl Default for WebhookTarget {
+    fn default() -> WebhookTarget {
+        WebhookTarget {
+            url: String::new(),
+            timeout_secs: 10,
+            auth_secret_key: String::new(),
         }
     }
 }
@@ -142,8 +175,45 @@ pub const CONFIG_SCHEMA: &str = r#"{
               "type": "string",
               "description": "Secret store key for the OBS WebSocket password",
               "default": "obs_password"
+            },
+            "allowed_commands": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Allowlist of obs-websocket v5 requestType values permitted for remote dispatch; empty disables command-out",
+              "default": []
+            },
+            "allowed_scenes": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Allowlist of scene names for SetCurrentProgramScene; empty allows any scene",
+              "default": []
             }
           }
+        },
+        "webhooks": {
+          "type": "object",
+          "description": "Webhook targets for remote dispatch",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "url": {
+                "type": "string",
+                "description": "HTTP URL to POST to"
+              },
+              "timeout_secs": {
+                "type": "integer",
+                "description": "Request timeout in seconds; clamped to 30s maximum",
+                "default": 10
+              },
+              "auth_secret_key": {
+                "type": "string",
+                "description": "Optional secret store key for Bearer token auth",
+                "default": ""
+              }
+            },
+            "required": ["url"]
+          },
+          "default": {}
         }
       }
     }
@@ -248,6 +318,54 @@ mod tests {
         assert_eq!(
             secret_key_advertised,
             ModuleConfig::default().bridge.obs.secret_key
+        );
+
+        let allowed_commands_advertised = obs_schema["allowed_commands"]["default"]
+            .as_array()
+            .unwrap();
+        assert_eq!(
+            allowed_commands_advertised.len(),
+            ModuleConfig::default().bridge.obs.allowed_commands.len()
+        );
+
+        let allowed_scenes_advertised = obs_schema["allowed_scenes"]["default"].as_array().unwrap();
+        assert_eq!(
+            allowed_scenes_advertised.len(),
+            ModuleConfig::default().bridge.obs.allowed_scenes.len()
+        );
+    }
+
+    #[test]
+    fn schema_default_for_webhooks_matches_the_code_default() {
+        let schema: serde_json::Value = serde_json::from_str(CONFIG_SCHEMA).unwrap();
+        let webhooks_advertised =
+            schema["properties"]["bridge"]["properties"]["webhooks"]["default"]
+                .as_object()
+                .unwrap();
+        assert_eq!(
+            webhooks_advertised.len(),
+            ModuleConfig::default().bridge.webhooks.len()
+        );
+    }
+
+    #[test]
+    fn schema_default_for_webhook_target_matches_the_code_default() {
+        let schema: serde_json::Value = serde_json::from_str(CONFIG_SCHEMA).unwrap();
+        let webhook_props = &schema["properties"]["bridge"]["properties"]["webhooks"]["additionalProperties"]
+            ["properties"];
+
+        let timeout_advertised = webhook_props["timeout_secs"]["default"].as_u64().unwrap();
+        assert_eq!(
+            timeout_advertised,
+            WebhookTarget::default().timeout_secs as u64
+        );
+
+        let auth_secret_advertised = webhook_props["auth_secret_key"]["default"]
+            .as_str()
+            .unwrap();
+        assert_eq!(
+            auth_secret_advertised,
+            WebhookTarget::default().auth_secret_key
         );
     }
 }

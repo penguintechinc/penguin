@@ -14,6 +14,7 @@
 //! adapter itself is out of scope here.
 
 mod bridge;
+pub mod bridge_action;
 mod commands;
 mod config;
 mod mask;
@@ -23,4 +24,6 @@ pub mod session_proxy;
 #[cfg(test)]
 mod testutil;
 
-pub use module::{WaddlebotModule, factory, get_session_proxy_registry};
+pub use module::{
+    WaddlebotModule, factory, get_bridge_action_registry, get_session_proxy_registry,
+};

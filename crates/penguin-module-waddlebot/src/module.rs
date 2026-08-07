@@ -68,6 +68,9 @@ pub fn get_session_proxy_registry()
     SESSION_PROXY_REGISTRY.get_or_init(|| StdMutex::new(None))
 }
 
+/// Re-export the bridge action registry getter so the daemon service can access it.
+pub use crate::bridge_action::get_bridge_action_registry;
+
 /// How long a cached auth probe (shared by [`Module::status`] and
 /// [`Module::health`]) is trusted before a fresh one runs. Matches
 /// `penguin-module-squawk`'s own health-cache TTL.
@@ -301,7 +304,10 @@ impl WaddlebotModule {
 
         // Build the list of adapters to attach. OBS adapter is created if
         // enabled in the config and the password secret is available.
+        // Keep a reference to the concrete OBS adapter for the executor.
         let mut adapters: Vec<Arc<dyn crate::bridge::BridgeAdapter>> = Vec::new();
+        let mut obs_adapter_for_executor: Option<Arc<crate::bridge::obs::ObsAdapter>> = None;
+
         if self.config().bridge.obs.enabled && !self.config().bridge.obs.url.is_empty() {
             match self
                 .host()
@@ -316,6 +322,7 @@ impl WaddlebotModule {
                         password,
                     );
                     let obs_adapter = Arc::new(crate::bridge::obs::ObsAdapter::new(obs_config));
+                    obs_adapter_for_executor = Some(obs_adapter.clone());
                     adapters.push(obs_adapter);
                 }
                 Err(_not_found) => {
@@ -335,6 +342,19 @@ impl WaddlebotModule {
         let handle = crate::bridge::start(&self.config().bridge, deps)
             .await
             .map_err(|err| ModuleError::new(format!("start bridge: {err}")))?;
+
+        // Create and register the bridge action executor with the OBS adapter (if available)
+        // and webhook targets from config.
+        let executor = Arc::new(crate::bridge_action::BridgeActionExecutor::new(
+            obs_adapter_for_executor,
+            self.config().bridge.obs.clone(),
+            self.config().bridge.webhooks.clone(),
+            self.host().secrets().clone(),
+        ));
+        let registry = crate::bridge_action::get_bridge_action_registry();
+        *registry
+            .lock()
+            .expect("bridge action registry mutex poisoned") = Some(executor);
 
         self.host().logger().info(
             "waddlebot bridge started",
@@ -373,6 +393,13 @@ impl WaddlebotModule {
             handle.stop().await;
             self.host().logger().info("waddlebot bridge stopped", &[]);
         }
+
+        // Clear the bridge action executor registry when the bridge stops.
+        let registry = crate::bridge_action::get_bridge_action_registry();
+        *registry
+            .lock()
+            .expect("bridge action registry mutex poisoned") = None;
+
         Ok(())
     }
 }

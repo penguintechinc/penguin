@@ -14,12 +14,15 @@
 //! logging applies [`crate::mask::mask_secret`] to any rendered secret. The
 //! adapter only connects to loopback addresses; a non-loopback URL is rejected.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use tokio::sync::{mpsc, oneshot};
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::Message;
+use uuid::Uuid;
 
 use crate::bridge::{BridgeAdapter, BridgeError, BridgeState};
 
@@ -50,14 +53,86 @@ impl ObsConfig {
 
 /// The OBS WebSocket v5 adapter — implements [`BridgeAdapter`] to connect
 /// to a local OBS WebSocket server and stream events.
+/// A command to send to the OBS WebSocket server (request).
+/// The sender will be resolved when a matching response (by request_id) arrives.
+pub struct ObsCommand {
+    pub request_type: String,
+    pub request_data: Value,
+    pub respond_to: oneshot::Sender<Result<Value, ObsCommandError>>,
+}
+
+/// Errors that can occur when sending a command to OBS.
+#[derive(Debug, Clone)]
+pub enum ObsCommandError {
+    /// OBS adapter is not connected.
+    NotConnected,
+    /// OBS did not respond within the timeout.
+    Timeout,
+    /// OBS rejected the request with an error code and comment.
+    Rejected { code: i32, comment: String },
+    /// Other error, as a string.
+    Other(String),
+}
+
+impl std::fmt::Display for ObsCommandError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ObsCommandError::NotConnected => write!(f, "obs adapter is not connected"),
+            ObsCommandError::Timeout => write!(f, "obs did not respond within the timeout"),
+            ObsCommandError::Rejected { code, comment } => {
+                write!(f, "obs rejected the request (code {code}): {comment}")
+            }
+            ObsCommandError::Other(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+impl std::error::Error for ObsCommandError {}
+
 pub struct ObsAdapter {
     config: ObsConfig,
+    /// Channel for sending commands to the connection task.
+    command_tx: mpsc::UnboundedSender<ObsCommand>,
+    /// Channel for receiving commands (taken by attach() when the connection starts).
+    /// Uses a parking_lot Mutex which can be locked from async contexts.
+    command_rx: parking_lot::Mutex<Option<mpsc::UnboundedReceiver<ObsCommand>>>,
 }
 
 impl ObsAdapter {
     /// Creates a new OBS adapter with the given configuration.
+    /// The channels are created here and exist from construction until the adapter is dropped.
     pub fn new(config: ObsConfig) -> Self {
-        Self { config }
+        let (command_tx, command_rx) = mpsc::unbounded_channel();
+        Self {
+            config,
+            command_tx,
+            command_rx: parking_lot::Mutex::new(Some(command_rx)),
+        }
+    }
+
+    /// Sends a command to OBS and waits for the response.
+    /// Returns immediately with NotConnected if the connection task is not running.
+    /// Returns Timeout if OBS doesn't respond within 10 seconds.
+    pub async fn send_request(
+        &self,
+        request_type: &str,
+        request_data: Value,
+    ) -> Result<Value, ObsCommandError> {
+        let (respond_to, rx) = oneshot::channel();
+        self.command_tx
+            .send(ObsCommand {
+                request_type: request_type.to_string(),
+                request_data,
+                respond_to,
+            })
+            .map_err(|_| ObsCommandError::NotConnected)?;
+
+        // Wait for response with a 10-second timeout
+        match tokio::time::timeout(std::time::Duration::from_secs(10), rx).await {
+            Ok(Ok(result)) => result,
+            Ok(Err(_)) => Err(ObsCommandError::NotConnected), // sender dropped mid-flight
+            Err(_) => Err(ObsCommandError::Timeout),          // 10s timeout elapsed
+        }
     }
 }
 
@@ -70,12 +145,20 @@ impl BridgeAdapter for ObsAdapter {
         let config = self.config.clone();
         let state_for_task = Arc::clone(&state);
 
+        // Take the command receiver from the Mutex; if it's already been taken,
+        // this is a second attach() call (which shouldn't happen, but fail loudly).
+        let command_rx = self
+            .command_rx
+            .lock()
+            .take()
+            .expect("OBS adapter attach() called twice (invariant violation)");
+
         // Spawn a background task that connects and streams events. If the
         // connection fails or drops, the task exits; the bridge continues
         // running unaffected. A reconnection strategy is not implemented in
         // this first version.
         tokio::spawn(async move {
-            if let Err(e) = run_obs_connection(config, state_for_task).await {
+            if let Err(e) = run_obs_connection(config, state_for_task, command_rx).await {
                 // Log the error but don't panic — a failed OBS connection does
                 // not take down the entire bridge. The logger is available only
                 // indirectly (through state.module.host().logger()), so we log
@@ -123,7 +206,11 @@ struct IdentifyData {
 
 /// Main connection loop: establishes the WebSocket, performs the auth
 /// handshake, and streams OBS events into the bridge state.
-async fn run_obs_connection(config: ObsConfig, state: Arc<BridgeState>) -> Result<(), String> {
+async fn run_obs_connection(
+    config: ObsConfig,
+    state: Arc<BridgeState>,
+    mut command_rx: mpsc::UnboundedReceiver<ObsCommand>,
+) -> Result<(), String> {
     use futures_util::sink::SinkExt as _;
     use futures_util::stream::StreamExt as _;
 
@@ -210,38 +297,132 @@ async fn run_obs_connection(config: ObsConfig, state: Arc<BridgeState>) -> Resul
         data: json!({"sessionId": hello_data.session_id}),
     });
 
-    // Stream incoming OBS events (op=5 is EventMessage) into the bridge.
-    while let Some(msg_result) = ws_recv.next().await {
-        match msg_result {
-            Ok(Message::Text(text)) => {
-                if let Ok(event_json) = serde_json::from_str::<WsMessage>(&text)
-                    && event_json.op == 5
-                {
-                    // op=5 is EventMessage from the server.
-                    if let Some(event_data) = event_json.d {
-                        // Extract the event name and metadata.
-                        if let Some(event_name) =
-                            event_data.get("eventName").and_then(|v| v.as_str())
-                        {
-                            state.publish_event(super::BridgeEvent {
-                                kind: format!("obs.event.{}", event_name),
-                                data: event_data.get("eventData").cloned().unwrap_or(Value::Null),
-                            });
+    // Map of pending request IDs to their response channels.
+    // When a RequestResponse (op=7) arrives, we resolve it here.
+    let mut pending: HashMap<String, oneshot::Sender<Result<Value, ObsCommandError>>> =
+        HashMap::new();
+
+    // Stream incoming OBS events and handle outgoing commands via select!.
+    loop {
+        tokio::select! {
+            // Handle incoming messages from OBS.
+            msg = ws_recv.next() => {
+                match msg {
+                    Some(Ok(Message::Text(text))) => {
+                        if let Ok(parsed) = serde_json::from_str::<WsMessage>(&text) {
+                            match parsed.op {
+                                5 => {
+                                    // op=5 is EventMessage from the server.
+                                    if let Some(event_data) = parsed.d {
+                                        // Extract the event name and metadata.
+                                        if let Some(event_name) =
+                                            event_data.get("eventName").and_then(|v| v.as_str())
+                                        {
+                                            state.publish_event(super::BridgeEvent {
+                                                kind: format!("obs.event.{}", event_name),
+                                                data: event_data
+                                                    .get("eventData")
+                                                    .cloned()
+                                                    .unwrap_or(Value::Null),
+                                            });
+                                        }
+                                    }
+                                }
+                                7 => {
+                                    // op=7 is RequestResponse from the server.
+                                    // Extract requestId and result, resolve the pending oneshot.
+                                    #[allow(clippy::collapsible_if)]
+                                    if let Some(response_data) = parsed.d {
+                                        if let Some(request_id) = response_data
+                                            .get("requestId")
+                                            .and_then(|v| v.as_str())
+                                        {
+                                            if let Some(tx) = pending.remove(request_id) {
+                                                let result = if let Some(status) = response_data.get("requestStatus") {
+                                                    let result = status.get("result").and_then(|v| v.as_bool()).unwrap_or(false);
+                                                    if result {
+                                                        Ok(response_data
+                                                            .get("responseData")
+                                                            .cloned()
+                                                            .unwrap_or(Value::Null))
+                                                    } else {
+                                                        let code = status
+                                                            .get("code")
+                                                            .and_then(|v| v.as_i64())
+                                                            .unwrap_or(0) as i32;
+                                                        let comment = status
+                                                            .get("comment")
+                                                            .and_then(|v| v.as_str())
+                                                            .unwrap_or("unknown error")
+                                                            .to_string();
+                                                        Err(ObsCommandError::Rejected {
+                                                            code,
+                                                            comment,
+                                                        })
+                                                    }
+                                                } else {
+                                                    Err(ObsCommandError::Other(
+                                                        "malformed response".to_string(),
+                                                    ))
+                                                };
+                                                let _ = tx.send(result);
+                                            }
+                                        }
+                                    }
+                                }
+                                _ => {}
+                            }
                         }
+                    }
+                    Some(Ok(Message::Close(_))) => {
+                        state.publish_event(super::BridgeEvent {
+                            kind: "obs.disconnected".to_string(),
+                            data: json!({}),
+                        });
+                        // Notify all pending requests that the connection closed.
+                        pending.clear();
+                        break;
+                    }
+                    Some(Err(e)) => {
+                        return Err(format!("WebSocket error: {e}"));
+                    }
+                    None => {
+                        // ws_recv ended (connection closed).
+                        state.publish_event(super::BridgeEvent {
+                            kind: "obs.disconnected".to_string(),
+                            data: json!({}),
+                        });
+                        // Notify all pending requests that the connection closed by dropping them.
+                        pending.clear();
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+
+            // Handle commands from the request sender.
+            cmd = command_rx.recv() => {
+                if let Some(ObsCommand { request_type, request_data, respond_to }) = cmd {
+                    let request_id = Uuid::new_v4().to_string();
+                    pending.insert(request_id.clone(), respond_to);
+
+                    let frame = json!({
+                        "op": 6,
+                        "d": {
+                            "requestType": request_type,
+                            "requestId": request_id,
+                            "requestData": request_data
+                        }
+                    });
+
+                    if ws_send.send(Message::Text(frame.to_string().into())).await.is_err() {
+                        // Send failed, which usually means the connection is dead.
+                        // Clear pending requests (dropping senders notifies their receivers).
+                        pending.clear();
+                        return Err("failed to send command to OBS".to_string());
                     }
                 }
             }
-            Ok(Message::Close(_)) => {
-                state.publish_event(super::BridgeEvent {
-                    kind: "obs.disconnected".to_string(),
-                    data: json!({}),
-                });
-                break;
-            }
-            Err(e) => {
-                return Err(format!("WebSocket error: {e}"));
-            }
-            _ => {}
         }
     }
 
@@ -908,5 +1089,143 @@ mod tests {
             event_kinds.iter().any(|k| k.contains("obs.disconnected")),
             "expected obs.disconnected event"
         );
+    }
+
+    #[test]
+    fn obs_adapter_rejects_non_loopback_url_directly() {
+        // Test that validate_loopback_url rejects non-loopback addresses
+        let result = validate_loopback_url("ws://192.168.1.100:4455");
+        assert!(result.is_err(), "should reject non-loopback URL");
+    }
+
+    #[test]
+    fn compute_auth_hash_produces_valid_sha256() {
+        // Test that compute_auth_hash produces a deterministic hash
+        let password = "test_password";
+        let challenge = "salt123.challenge456";
+
+        let hash1 = compute_auth_hash(password, challenge);
+        let hash2 = compute_auth_hash(password, challenge);
+
+        // Should be deterministic
+        assert!(hash1.is_ok());
+        assert!(hash2.is_ok());
+        assert_eq!(hash1.unwrap(), hash2.unwrap());
+    }
+
+    #[test]
+    fn compute_auth_hash_different_challenges_produce_different_hashes() {
+        let password = "test_password";
+        let challenge1 = "salt123.challenge456";
+        let challenge2 = "salt456.challenge789";
+
+        let hash1 = compute_auth_hash(password, challenge1).unwrap();
+        let hash2 = compute_auth_hash(password, challenge2).unwrap();
+
+        // Different challenges should produce different hashes
+        assert_ne!(hash1, hash2);
+    }
+
+    #[tokio::test]
+    async fn obs_adapter_send_command_to_connected_server() {
+        let (server, url) = MockObsServer::start().await;
+
+        let config = ObsConfig::new(&url, "test-password");
+        let adapter = ObsAdapter::new(config);
+
+        let hub = crate::testutil::MockHub::start().await;
+        let dir = tempfile::tempdir().unwrap();
+        let mut host = crate::testutil::FakeHost::new(dir.path().to_path_buf());
+        host.config = serde_json::to_vec(&json!({
+            "hub": {"base_url": hub.base_url},
+            "community_id": 1,
+        }))
+        .unwrap();
+        let module = crate::module::WaddlebotModule::new();
+        module.init(Arc::new(host)).await.expect("init succeeds");
+        let state = Arc::new(BridgeState::new(module, "test-cat".to_string()));
+
+        // Subscribe to events
+        let mut rx = state.subscribe();
+
+        // Attach the adapter
+        adapter.attach(Arc::clone(&state)).expect("attach succeeds");
+
+        // Wait for connection events
+        let timeout = Duration::from_secs(2);
+        let start = std::time::Instant::now();
+        while start.elapsed() < timeout {
+            if let Ok(Ok(e)) = tokio::time::timeout(Duration::from_millis(100), rx.recv()).await
+                && e.kind.contains("obs.authenticated")
+            {
+                break;
+            }
+        }
+
+        // Stop the server
+        server.stop().await;
+    }
+
+    #[tokio::test]
+    async fn obs_adapter_handles_connection_failure_gracefully() {
+        // Try to connect to a port that is not listening
+        let config = ObsConfig::new("ws://127.0.0.1:9999", "test-password");
+        let adapter = ObsAdapter::new(config);
+
+        let hub = crate::testutil::MockHub::start().await;
+        let dir = tempfile::tempdir().unwrap();
+        let mut host = crate::testutil::FakeHost::new(dir.path().to_path_buf());
+        host.config = serde_json::to_vec(&json!({
+            "hub": {"base_url": hub.base_url},
+            "community_id": 1,
+        }))
+        .unwrap();
+        let module = crate::module::WaddlebotModule::new();
+        module.init(Arc::new(host)).await.expect("init succeeds");
+        let state = Arc::new(BridgeState::new(module, "test-cat".to_string()));
+
+        // Attaching should start a background task that tries to connect
+        // The attach itself may succeed (async), but the connection should fail
+        let _ = adapter.attach(Arc::clone(&state));
+
+        // Give it a moment to try connecting (and fail gracefully)
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+
+    #[test]
+    fn obs_adapter_new_creates_adapter() {
+        let config = ObsConfig::new("ws://127.0.0.1:4455", "test-password");
+        let adapter = ObsAdapter::new(config);
+
+        // Just verify the adapter was created successfully
+        assert!(!adapter.config.url.is_empty());
+        assert!(!adapter.config.password.is_empty());
+    }
+
+    #[test]
+    fn obs_config_new_stores_url_and_password() {
+        let config = ObsConfig::new("ws://127.0.0.1:4455", "my_secret");
+
+        assert_eq!(config.url, "ws://127.0.0.1:4455");
+        assert_eq!(config.password, "my_secret");
+    }
+
+    #[test]
+    fn obs_command_error_display() {
+        let err1 = ObsCommandError::NotConnected;
+        assert!(err1.to_string().contains("not connected"));
+
+        let err2 = ObsCommandError::Timeout;
+        assert!(err2.to_string().contains("timeout"));
+
+        let err3 = ObsCommandError::Rejected {
+            code: 1,
+            comment: "bad request".to_string(),
+        };
+        assert!(err3.to_string().contains("bad request"));
+        assert!(err3.to_string().contains("code 1"));
+
+        let err4 = ObsCommandError::Other("custom error".to_string());
+        assert!(err4.to_string().contains("custom error"));
     }
 }

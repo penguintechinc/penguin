@@ -48,3 +48,27 @@ message UserSession {
 message SetUserSessionResponse {
   string api_version = 1;
 }
+
+service BridgeActionProxy {
+  // api_version carried per-request per PenguinTech gRPC standards; unknown
+  // versions return UNIMPLEMENTED, same as SessionProxy.
+  rpc ExecuteBridgeAction(BridgeActionRequest) returns (BridgeActionResponse);
+}
+
+message BridgeActionRequest {
+  string api_version = 1;
+  string module_name = 2;        // "waddlebot" today — mirrors action.module_name
+  string action_type = 3;        // "obs_command" | "webhook"
+  string obs_request_type = 4;   // e.g. "SetCurrentProgramScene" — obs_command only
+  bytes  obs_request_data = 5;   // JSON-encoded obs-websocket v5 requestData — obs_command only
+  string webhook_name = 6;       // symbolic name from bridge.webhooks — webhook only
+  bytes  webhook_payload = 7;    // JSON-encoded POST body — webhook only
+}
+
+message BridgeActionResponse {
+  string api_version = 1;
+  bool   success = 2;
+  uint32 http_status = 3;        // webhook only; 0 if not applicable
+  bytes  obs_response_data = 4;  // JSON-encoded obs-websocket v5 responseData; empty if not applicable
+  string error = 5;              // human-readable failure reason; empty on success
+}

@@ -12,6 +12,7 @@ workspace = true
 [dependencies]
 # The Module contract this crate implements, and the hub REST client it wraps.
 penguin-sdk.workspace = true
+penguin-proto.workspace = true
 waddlebot-client.workspace = true
 # The local dial-in bridge's unix-socket transport: SO_PEERCRED authorization
 # reusing the exact same decision logic as the daemon's own control socket.
@@ -48,6 +49,10 @@ tokio-tungstenite.workspace = true
 futures-util.workspace = true
 base64.workspace = true
 url.workspace = true
+# UUID generation for obs-websocket v5 request IDs.
+uuid = { version = "1.24.0", features = ["v4"] }
+# parking_lot for synchronous mutex that works in async contexts.
+parking_lot = "0.12"
 
 [dev-dependencies]
 tempfile = "3"
