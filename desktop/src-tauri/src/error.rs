@@ -22,6 +22,8 @@ pub fn desktop_error_to_string(err: DesktopError) -> String {
         DesktopError::InvalidCallback(msg) => format!("OAuth callback error: {}", msg),
         DesktopError::UrlError(msg) => format!("URL error: {}", msg),
         DesktopError::TokenRotationFailed(msg) => format!("Token rotation error: {}", msg),
+        DesktopError::LuaError(msg) => format!("Lua execution error: {}", msg),
+        DesktopError::JsonError(msg) => format!("JSON serialization error: {}", msg),
         DesktopError::Internal(msg) => format!("Internal error: {}", msg),
     }
 }
@@ -33,7 +35,7 @@ mod tests {
     #[test]
     fn test_error_conversion() {
         let err = DesktopError::InvalidCredentials;
-        let s: String = err.into();
+        let s = desktop_error_to_string(err);
         assert_eq!(s, "Invalid email or password");
     }
 }

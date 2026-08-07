@@ -72,7 +72,8 @@
   </head>
 
   <body>
-    <div class="container">
+    <!-- Main content -->
+    <div id="main-content" class="container">
       <div class="card">
         <h1>🐧 Penguin Desktop</h1>
         <p><strong>Phase 2b: Tauri Shell</strong></p>
@@ -92,6 +93,7 @@
             <li><code>api_request(method, path, body)</code> — Proxy API calls</li>
             <li><code>oauth_start(platform, hub_url)</code> — Begin OAuth flow</li>
             <li><code>oauth_complete(code, state_param, stored_state)</code> — Complete OAuth callback</li>
+            <li><code>respond_to_approval(action_id, approved)</code> — Respond to approval request</li>
           </ul>
         </div>
 
@@ -101,5 +103,76 @@
         </div>
       </div>
     </div>
+
+    <!-- Approval dialog (hidden by default) -->
+    <div id="approval-dialog" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0, 0, 0, 0.7); display: flex; align-items: center; justify-content: center; z-index: 1000;">
+      <div class="card" style="max-width: 600px; max-height: 80vh; overflow-y: auto;">
+        <h2 style="margin-bottom: 16px; font-size: 24px;">Action Approval Required</h2>
+        <p style="text-align: left; margin-bottom: 16px;">A script is requesting execution. Please review the content below:</p>
+
+        <div style="background: #0f172a; border: 1px solid #334155; border-radius: 4px; padding: 16px; margin-bottom: 24px; text-align: left;">
+          <div style="margin-bottom: 12px;">
+            <strong>Action Type:</strong>
+            <p id="approval-type" style="margin: 4px 0; color: #f59e0b; font-size: 14px;">-</p>
+          </div>
+          <div style="margin-bottom: 12px;">
+            <strong>Script Content:</strong>
+            <pre id="approval-content" style="background: #0f172a; padding: 8px; border-radius: 3px; overflow-x: auto; color: #e2e8f0; font-size: 12px; margin: 4px 0;">-</pre>
+          </div>
+          <div style="margin-bottom: 12px;">
+            <strong>Timeout:</strong>
+            <p id="approval-timeout" style="margin: 4px 0; color: #f59e0b; font-size: 14px;">-</p>
+          </div>
+        </div>
+
+        <div style="display: flex; gap: 12px; justify-content: flex-end;">
+          <button id="approval-deny" style="background: #7f1d1d; color: #fca5a5; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer; font-size: 14px; font-weight: bold;">Deny</button>
+          <button id="approval-approve" style="background: #15803d; color: #86efac; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer; font-size: 14px; font-weight: bold;">Approve</button>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      // Event listener for approval requests
+      async function setupApprovalListener() {
+        const { listen } = window.__TAURI__.event;
+        const { invoke } = window.__TAURI__.core;
+
+        listen('action-approval-requested', (event) => {
+          const action = event.payload;
+          console.log('[ApprovalDialog] Approval requested for:', action.id);
+
+          // Populate the dialog
+          document.getElementById('approval-type').textContent = action.action_type || '-';
+          document.getElementById('approval-content').textContent = action.content || '-';
+          document.getElementById('approval-timeout').textContent = `${action.timeout_secs || 120} seconds`;
+
+          // Show the dialog
+          const dialog = document.getElementById('approval-dialog');
+          dialog.style.display = 'flex';
+
+          // Handle Approve button
+          const approveBtn = document.getElementById('approval-approve');
+          approveBtn.onclick = async () => {
+            console.log('[ApprovalDialog] User approved action:', action.id);
+            await invoke('respond_to_approval', { actionId: action.id, approved: true });
+            dialog.style.display = 'none';
+          };
+
+          // Handle Deny button
+          const denyBtn = document.getElementById('approval-deny');
+          denyBtn.onclick = async () => {
+            console.log('[ApprovalDialog] User denied action:', action.id);
+            await invoke('respond_to_approval', { actionId: action.id, approved: false });
+            dialog.style.display = 'none';
+          };
+        });
+      }
+
+      // Initialize listeners when Tauri is ready
+      if (window.__TAURI__) {
+        setupApprovalListener().catch(err => console.error('[ApprovalDialog] Setup failed:', err));
+      }
+    </script>
   </body>
 </html>
