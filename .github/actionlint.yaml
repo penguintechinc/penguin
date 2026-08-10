@@ -1,0 +1,16 @@
+# actionlint config — see https://github.com/rhysd/actionlint/blob/main/docs/config.md
+#
+# actionlint v1.7.4's bundled runner-label database predates two GitHub-hosted
+# runner labels this repo already uses deliberately (see release.yml and
+# release-tray.yml's header comments): `ubuntu-24.04-arm` (native arm64
+# hosted runner) and `macos-15-intel` (native Intel runner, since macos-13
+# was retired). Both are real, currently available GitHub-hosted labels, not
+# self-hosted runners — `self-hosted-runner.labels` is actionlint's
+# documented mechanism for allowlisting labels its static database doesn't
+# recognize yet, and is the standard workaround for this exact class of
+# tool-version lag. Remove entries here once an actionlint release ships
+# with native knowledge of them.
+self-hosted-runner:
+  labels:
+    - ubuntu-24.04-arm
+    - macos-15-intel

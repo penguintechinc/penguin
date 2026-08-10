@@ -12,6 +12,16 @@ linters:
   settings:
     gosec:
       excludes: []
+  exclusions:
+    rules:
+      # G304 (potential file inclusion via variable) is a standard gosec false
+      # positive in test code that reads fixtures by enumerating a fixed testdata
+      # directory (os.ReadDir + filepath.Join) rather than accepting
+      # attacker-controlled input. Scoped to _test.go only — production code
+      # still gets the full G304 check.
+      - path: _test\.go
+        linters: [gosec]
+        text: "G304"
 
 issues:
   max-issues-per-linter: 0

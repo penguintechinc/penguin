@@ -76,7 +76,7 @@ run_check() {
 
 # Main execution
 main() {
-    local target_service="$1"
+    local _target_service="$1"
     local all_passed=true
 
     echo "Step 1: Linting"

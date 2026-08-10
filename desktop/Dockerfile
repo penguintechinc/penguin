@@ -13,6 +13,15 @@ WORKDIR /app
 # - ca-certificates: TLS roots for `curl`, needed by scripts/fetch-webui.sh
 #   (invoked automatically via tauri.conf.json's beforeBuildCommand) to fetch
 #   the published waddlebot webui dist over HTTPS
+# Unpinned apt package versions: this is a local/CI build-tool image (compiles
+# the Tauri app; never deployed as a running service — see README.md
+# "Docker (full build environment)"), not a customer-distributed artifact.
+# The base image is SHA256-pinned above; supply-chain integrity comes from
+# Debian's signed apt repos, not per-package version pins. Pinning webkit2gtk/
+# gtk/dbus dev-package versions here would make the image break every time
+# Debian bookworm rotates a point release, for no security benefit on a
+# throwaway build container.
+# hadolint ignore=DL3008
 RUN apt-get update && apt-get install -y --no-install-recommends \
     cmake \
     curl \

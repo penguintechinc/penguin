@@ -49,7 +49,7 @@ func TestConfigCorpusConformance(t *testing.T) {
 
 		tmp := t.TempDir()
 		modules := filepath.Join(tmp, "modules.d")
-		if err := os.MkdirAll(modules, 0o755); err != nil {
+		if err := os.MkdirAll(modules, 0o750); err != nil {
 			t.Fatalf("mkdir modules.d: %v", err)
 		}
 		if err := os.WriteFile(filepath.Join(modules, "mod.yaml"), []byte(c.InstanceYaml), 0o600); err != nil {
