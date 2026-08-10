@@ -1,0 +1,31 @@
+# gitleaks false-positive suppressions, reviewed 2026-08-10.
+# Format: <commit-sha>:<file>:<rule-id>:<start-line> (one gitleaks fingerprint per line).
+# Each entry below was independently read and confirmed to be a non-secret before
+# being added — do not add new entries here without the same verification. Never
+# suppress by path-glob or rule-id alone; every line must be a specific fingerprint
+# for a specific, reviewed finding.
+#
+# Category: secret-masking / crypto test fixtures — the flagged string is
+# deliberately fake input used to prove redaction or PEM-parsing error handling
+# works; it is never used as a real credential or key at runtime.
+1e06c0a7f91f71ab3a9b1bb09ae5b226f20a15d4:crates/penguin-desktop-core/src/error.rs:generic-api-key:130
+798cdafb6fb06fbb00f67edbd7c2a60cfe127821:crates/squawk-client/src/pem.rs:private-key:241
+
+# Category: code comment mentioning a crypto algorithm name, not a credential —
+# "XChaCha20-Poly1305-encrypted" describes the encryption scheme used by the
+# secrets store, not a key or token value.
+5bedfd5b0fd2f66c9a7f93671e463037e33caedd:bins/penguind/src/daemon_main.rs:generic-api-key:170
+
+# Category: documentation placeholder tokens — obvious example/placeholder
+# values in docs (YOUR_TOKEN_HERE, sk-live-abc123, ghp_abc123XYZ, truncated
+# "eyJ...==="-style JWT examples ending in a literal "...") used to illustrate
+# API request/response shapes, never real credentials. docs/API.md no longer
+# exists on this branch but remains in git history, where gitleaks still finds it.
+7b6795b03512c8124006b196658fb4311e7260ed:docs/API.md:generic-api-key:35
+7b6795b03512c8124006b196658fb4311e7260ed:docs/API.md:generic-api-key:36
+7b6795b03512c8124006b196658fb4311e7260ed:docs/API.md:generic-api-key:82
+7b6795b03512c8124006b196658fb4311e7260ed:docs/API.md:generic-api-key:89
+7b6795b03512c8124006b196658fb4311e7260ed:docs/standards/ARCHITECTURE.md:curl-auth-header:188
+7b6795b03512c8124006b196658fb4311e7260ed:docs/standards/SECURITY.md:generic-api-key:85
+7b6795b03512c8124006b196658fb4311e7260ed:docs/standards/SECURITY.md:curl-auth-header:81
+7b6795b03512c8124006b196658fb4311e7260ed:docs/standards/AUTHENTICATION.md:curl-auth-header:399

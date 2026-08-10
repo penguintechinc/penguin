@@ -4,12 +4,31 @@
 [advisories]
 # Fail on any known RustSec advisory (the cargo-audit equivalent gate).
 yanked = "deny"
+# Transitive via Linux system-tray GTK3 dependency chain (penguin-tray); unmaintained crates,
+# not active exploitable CVEs. Tracked for replacement separately (task #60).
+ignore = [
+    "RUSTSEC-2024-0370",
+    "RUSTSEC-2024-0384",
+    "RUSTSEC-2024-0411",
+    "RUSTSEC-2024-0412",
+    "RUSTSEC-2024-0413",
+    "RUSTSEC-2024-0414",
+    "RUSTSEC-2024-0415",
+    "RUSTSEC-2024-0416",
+    "RUSTSEC-2024-0418",
+    "RUSTSEC-2024-0419",
+    "RUSTSEC-2024-0420",
+    "RUSTSEC-2024-0436",
+]
 
 [licenses]
 # Permissive licenses only. MPL-2.0 is allowed specifically because the
 # vendored hashicorp/go-plugin .proto files carry MPL-2.0 headers.
+# MIT-0, Unlicense, and CDLA-Permissive-2.0 are OSI/equivalent permissive.
+# LicenseRef-PenguinTech is the internal workspace license.
 allow = [
     "MIT",
+    "MIT-0",
     "Apache-2.0",
     "Apache-2.0 WITH LLVM-exception",
     "BSD-2-Clause",
@@ -17,14 +36,21 @@ allow = [
     "ISC",
     "MPL-2.0",
     "Unicode-3.0",
+    "Unlicense",
+    "CDLA-Permissive-2.0",
     "Zlib",
+    "LicenseRef-PenguinTech",
 ]
 confidence-threshold = 0.9
 
 [bans]
 # Surface accidental duplicate dependency versions; not fatal during the port.
 multiple-versions = "warn"
+# Fail on unpinned external dependencies; workspace members and path deps are allowed.
 wildcards = "deny"
+# Workspace members (workspace = true) and path dependencies without explicit versions
+# are internal pinned crates—not a supply-chain risk. Allow them without treating as wildcards.
+allow-wildcard-paths = true
 
 [sources]
 # Only crates.io — never a private/internal registry.

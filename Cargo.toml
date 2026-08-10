@@ -20,6 +20,7 @@ edition = "2024"
 rust-version = "1.97"
 license = "LicenseRef-PenguinTech"
 repository = "https://github.com/penguintechinc/penguin"
+publish = false
 
 # Shared dependency versions are pinned here as crates are introduced per
 # milestone (M1+). Risk-bearing crates use an exact `=x.y.z`; the rest use a

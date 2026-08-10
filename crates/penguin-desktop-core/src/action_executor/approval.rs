@@ -103,6 +103,30 @@ impl ApprovalPrompt for MockApprovalPrompt {
     }
 }
 
+/// Simple test helper: always approves (no-op, just allows execution).
+#[cfg(test)]
+pub struct NoopPrompt;
+
+#[cfg(test)]
+#[async_trait]
+impl ApprovalPrompt for NoopPrompt {
+    async fn ask(&self, _action: &PendingAction) -> ApprovalDecision {
+        ApprovalDecision::Approved
+    }
+}
+
+/// Simple test helper: always denies.
+#[cfg(test)]
+pub struct DenyingPrompt;
+
+#[cfg(test)]
+#[async_trait]
+impl ApprovalPrompt for DenyingPrompt {
+    async fn ask(&self, _action: &PendingAction) -> ApprovalDecision {
+        ApprovalDecision::Denied
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -200,29 +224,5 @@ mod tests {
         mock.set_mode(ApprovalMode::AlwaysDeny).await;
         let decision = mock.ask(&action).await;
         assert!(matches!(decision, ApprovalDecision::Denied));
-    }
-}
-
-/// Simple test helper: always approves (no-op, just allows execution).
-#[cfg(test)]
-pub struct NoopPrompt;
-
-#[cfg(test)]
-#[async_trait]
-impl ApprovalPrompt for NoopPrompt {
-    async fn ask(&self, _action: &PendingAction) -> ApprovalDecision {
-        ApprovalDecision::Approved
-    }
-}
-
-/// Simple test helper: always denies.
-#[cfg(test)]
-pub struct DenyingPrompt;
-
-#[cfg(test)]
-#[async_trait]
-impl ApprovalPrompt for DenyingPrompt {
-    async fn ask(&self, _action: &PendingAction) -> ApprovalDecision {
-        ApprovalDecision::Denied
     }
 }

@@ -5,6 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+publish = false
 
 # This crate is entirely generated code and is excluded from the coverage gate
 # (see the Makefile / llvm-cov ignore regexes). It carries no hand-written

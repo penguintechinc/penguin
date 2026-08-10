@@ -1506,8 +1506,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_executor_poll_against_mock() -> Result<()> {
-        let test_dir = tempfile::tempdir()
-            .map_err(|e| DesktopError::Internal(format!("temp dir: {}", e)))?;
+        let test_dir =
+            tempfile::tempdir().map_err(|e| DesktopError::Internal(format!("temp dir: {}", e)))?;
 
         let mock = MockSessionProxy::new();
         let mock_clone = mock.clone();
@@ -1534,7 +1534,7 @@ mod tests {
         mock.set_proxy_response(200, poll_resp.to_string().into_bytes())
             .await;
 
-        let mut session = Session::new_for_testing(
+        let session = Session::new_for_testing(
             socket_path.to_str().expect("socket path"),
             test_dir.path().to_path_buf(),
         )
@@ -1543,7 +1543,9 @@ mod tests {
         let machine_id = MachineId("test-machine-id-poll".to_string());
         let mut executor = ActionExecutor::new_for_testing(
             Arc::new(tokio::sync::Mutex::new(session)),
-            Box::new(approval::MockApprovalPrompt::new(approval::ApprovalMode::AlwaysApprove)),
+            Box::new(approval::MockApprovalPrompt::new(
+                approval::ApprovalMode::AlwaysApprove,
+            )),
             machine_id,
         );
 
@@ -1564,14 +1566,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_executor_post_response_against_mock() -> Result<()> {
-        let test_dir = tempfile::tempdir()
-            .map_err(|e| DesktopError::Internal(format!("temp dir: {}", e)))?;
+        let test_dir =
+            tempfile::tempdir().map_err(|e| DesktopError::Internal(format!("temp dir: {}", e)))?;
 
         let mock = MockSessionProxy::new();
         let mock_clone = mock.clone();
         let socket_path = start_mock_server(mock_clone).await;
 
-        let mut session = Session::new_for_testing(
+        let session = Session::new_for_testing(
             socket_path.to_str().expect("socket path"),
             test_dir.path().to_path_buf(),
         )
@@ -1580,7 +1582,9 @@ mod tests {
         let machine_id = MachineId("test-machine-id-poll".to_string());
         let mut executor = ActionExecutor::new_for_testing(
             Arc::new(tokio::sync::Mutex::new(session)),
-            Box::new(approval::MockApprovalPrompt::new(approval::ApprovalMode::AlwaysApprove)),
+            Box::new(approval::MockApprovalPrompt::new(
+                approval::ApprovalMode::AlwaysApprove,
+            )),
             machine_id,
         );
 
@@ -1611,14 +1615,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_executor_register_against_mock() -> Result<()> {
-        let test_dir = tempfile::tempdir()
-            .map_err(|e| DesktopError::Internal(format!("temp dir: {}", e)))?;
+        let test_dir =
+            tempfile::tempdir().map_err(|e| DesktopError::Internal(format!("temp dir: {}", e)))?;
 
         let mock = MockSessionProxy::new();
         let mock_clone = mock.clone();
         let socket_path = start_mock_server(mock_clone).await;
 
-        let mut session = Session::new_for_testing(
+        let session = Session::new_for_testing(
             socket_path.to_str().expect("socket path"),
             test_dir.path().to_path_buf(),
         )
@@ -1627,7 +1631,9 @@ mod tests {
         let machine_id = MachineId("test-machine-id-poll".to_string());
         let mut executor = ActionExecutor::new_for_testing(
             Arc::new(tokio::sync::Mutex::new(session)),
-            Box::new(approval::MockApprovalPrompt::new(approval::ApprovalMode::AlwaysApprove)),
+            Box::new(approval::MockApprovalPrompt::new(
+                approval::ApprovalMode::AlwaysApprove,
+            )),
             machine_id,
         );
 
@@ -1644,14 +1650,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_executor_heartbeat_against_mock() -> Result<()> {
-        let test_dir = tempfile::tempdir()
-            .map_err(|e| DesktopError::Internal(format!("temp dir: {}", e)))?;
+        let test_dir =
+            tempfile::tempdir().map_err(|e| DesktopError::Internal(format!("temp dir: {}", e)))?;
 
         let mock = MockSessionProxy::new();
         let mock_clone = mock.clone();
         let socket_path = start_mock_server(mock_clone).await;
 
-        let mut session = Session::new_for_testing(
+        let session = Session::new_for_testing(
             socket_path.to_str().expect("socket path"),
             test_dir.path().to_path_buf(),
         )
@@ -1660,7 +1666,9 @@ mod tests {
         let machine_id = MachineId("test-machine-id-poll".to_string());
         let mut executor = ActionExecutor::new_for_testing(
             Arc::new(tokio::sync::Mutex::new(session)),
-            Box::new(approval::MockApprovalPrompt::new(approval::ApprovalMode::AlwaysApprove)),
+            Box::new(approval::MockApprovalPrompt::new(
+                approval::ApprovalMode::AlwaysApprove,
+            )),
             machine_id,
         );
 
@@ -1677,14 +1685,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_executor_unregister_against_mock() -> Result<()> {
-        let test_dir = tempfile::tempdir()
-            .map_err(|e| DesktopError::Internal(format!("temp dir: {}", e)))?;
+        let test_dir =
+            tempfile::tempdir().map_err(|e| DesktopError::Internal(format!("temp dir: {}", e)))?;
 
         let mock = MockSessionProxy::new();
         let mock_clone = mock.clone();
         let socket_path = start_mock_server(mock_clone).await;
 
-        let mut session = Session::new_for_testing(
+        let session = Session::new_for_testing(
             socket_path.to_str().expect("socket path"),
             test_dir.path().to_path_buf(),
         )
@@ -1693,7 +1701,9 @@ mod tests {
         let machine_id = MachineId("test-machine-id-poll".to_string());
         let mut executor = ActionExecutor::new_for_testing(
             Arc::new(tokio::sync::Mutex::new(session)),
-            Box::new(approval::MockApprovalPrompt::new(approval::ApprovalMode::AlwaysApprove)),
+            Box::new(approval::MockApprovalPrompt::new(
+                approval::ApprovalMode::AlwaysApprove,
+            )),
             machine_id,
         );
 
@@ -1724,14 +1734,14 @@ mod tests {
             expires_at: "2025-01-01T00:05:00Z".to_string(),
         };
 
-        let test_dir = tempfile::tempdir()
-            .map_err(|e| DesktopError::Internal(format!("temp dir: {}", e)))?;
+        let test_dir =
+            tempfile::tempdir().map_err(|e| DesktopError::Internal(format!("temp dir: {}", e)))?;
 
         let mock = MockSessionProxy::new();
         let mock_clone = mock.clone();
         let socket_path = start_mock_server(mock_clone).await;
 
-        let mut session = Session::new_for_testing(
+        let session = Session::new_for_testing(
             socket_path.to_str().expect("socket path"),
             test_dir.path().to_path_buf(),
         )
@@ -1741,7 +1751,9 @@ mod tests {
         let machine_id = MachineId("test-machine-id-deny".to_string());
         let mut executor = ActionExecutor::new_for_testing(
             Arc::new(tokio::sync::Mutex::new(session)),
-            Box::new(approval::MockApprovalPrompt::new(approval::ApprovalMode::AlwaysDeny)),
+            Box::new(approval::MockApprovalPrompt::new(
+                approval::ApprovalMode::AlwaysDeny,
+            )),
             machine_id,
         );
 
@@ -1757,8 +1769,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_run_poll_loop_with_actions() -> Result<()> {
-        let test_dir = tempfile::tempdir()
-            .map_err(|e| DesktopError::Internal(format!("temp dir: {}", e)))?;
+        let test_dir =
+            tempfile::tempdir().map_err(|e| DesktopError::Internal(format!("temp dir: {}", e)))?;
 
         let mock = MockSessionProxy::new();
         let mock_clone = mock.clone();
@@ -1798,7 +1810,9 @@ mod tests {
         let machine_id = MachineId("test-machine-id-loop".to_string());
         let executor = ActionExecutor::new_for_testing(
             Arc::clone(&session),
-            Box::new(approval::MockApprovalPrompt::new(approval::ApprovalMode::AlwaysApprove)),
+            Box::new(approval::MockApprovalPrompt::new(
+                approval::ApprovalMode::AlwaysApprove,
+            )),
             machine_id,
         );
 
@@ -1824,14 +1838,277 @@ mod tests {
         let action_count = join_result?;
 
         // Verify: poll loop ran and completed successfully
-        assert!(action_count >= 1, "poll loop should have processed at least one action");
+        assert!(
+            action_count >= 1,
+            "poll loop should have processed at least one action"
+        );
 
         // Verify: mock recorded poll and response calls
         let requests = mock.recorded_requests().await;
         assert!(requests.len() >= 2, "should have poll and response calls"); // At least poll and response post
-        assert!(requests.iter().any(|(method, path)| method == "GET" && path.starts_with("/api/v1/bridge/poll")));
+        assert!(
+            requests
+                .iter()
+                .any(|(method, path)| method == "GET" && path.starts_with("/api/v1/bridge/poll"))
+        );
 
         Ok(())
     }
 
+    #[tokio::test]
+    async fn test_execute_with_script_and_parameters() -> Result<()> {
+        let test_dir =
+            tempfile::tempdir().map_err(|e| DesktopError::Internal(format!("temp dir: {}", e)))?;
+
+        let mock = MockSessionProxy::new();
+        let mock_clone = mock.clone();
+        let socket_path = start_mock_server(mock_clone).await;
+
+        let session = Session::new_for_testing(
+            socket_path.to_str().expect("socket path"),
+            test_dir.path().to_path_buf(),
+        )
+        .await?;
+
+        let machine_id = MachineId("test-machine-id-exec-params".to_string());
+        let mut executor = ActionExecutor::new_for_testing(
+            Arc::new(tokio::sync::Mutex::new(session)),
+            Box::new(approval::MockApprovalPrompt::new(
+                approval::ApprovalMode::AlwaysApprove,
+            )),
+            machine_id,
+        );
+
+        let action = ActionRequest {
+            id: "act_params_test".to_string(),
+            r#type: "bash".to_string(),
+            module_name: None,
+            action: None,
+            parameters: serde_json::json!({
+                "source": "echo 'param test'"
+            }),
+            user_id: "user_param".to_string(),
+            community_id: "comm_param".to_string(),
+            priority: 1,
+            timeout: 10,
+            created_at: "2025-01-01T00:00:00Z".to_string(),
+            expires_at: "2025-01-01T00:00:10Z".to_string(),
+        };
+
+        let result = executor.execute(action).await;
+        assert!(
+            result.success,
+            "execute should succeed with approved script"
+        );
+        assert!(result.result.is_some(), "should have result with output");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_poll_with_empty_actions() -> Result<()> {
+        let test_dir =
+            tempfile::tempdir().map_err(|e| DesktopError::Internal(format!("temp dir: {}", e)))?;
+
+        let mock = MockSessionProxy::new();
+
+        let poll_resp = serde_json::json!({
+            "actions": [],
+            "next_poll": "2025-01-01T00:00:35Z",
+            "server_time": "2025-01-01T00:00:30Z",
+            "has_more": false,
+            "poll_count": 1
+        });
+        mock.set_proxy_response(200, poll_resp.to_string().into_bytes())
+            .await;
+
+        let mock_clone = mock.clone();
+        let socket_path = start_mock_server(mock_clone).await;
+
+        let session = Session::new_for_testing(
+            socket_path.to_str().expect("socket path"),
+            test_dir.path().to_path_buf(),
+        )
+        .await?;
+
+        let machine_id = MachineId("test-machine-id-empty-poll".to_string());
+        let mut executor = ActionExecutor::new_for_testing(
+            Arc::new(tokio::sync::Mutex::new(session)),
+            Box::new(approval::MockApprovalPrompt::new(
+                approval::ApprovalMode::AlwaysApprove,
+            )),
+            machine_id,
+        );
+
+        let poll_response = executor.poll().await?;
+
+        // Verify: empty actions list is handled gracefully
+        assert_eq!(poll_response.actions.len(), 0);
+        assert_eq!(poll_response.poll_count, 1);
+
+        // Verify: mock received poll call
+        let requests = mock.recorded_requests().await;
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].0, "GET");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_post_response_with_error() -> Result<()> {
+        let test_dir =
+            tempfile::tempdir().map_err(|e| DesktopError::Internal(format!("temp dir: {}", e)))?;
+
+        let mock = MockSessionProxy::new();
+        let mock_clone = mock.clone();
+        let socket_path = start_mock_server(mock_clone).await;
+
+        let session = Session::new_for_testing(
+            socket_path.to_str().expect("socket path"),
+            test_dir.path().to_path_buf(),
+        )
+        .await?;
+
+        let machine_id = MachineId("test-machine-id-error-response".to_string());
+        let mut executor = ActionExecutor::new_for_testing(
+            Arc::new(tokio::sync::Mutex::new(session)),
+            Box::new(approval::MockApprovalPrompt::new(
+                approval::ApprovalMode::AlwaysApprove,
+            )),
+            machine_id,
+        );
+
+        let error_response = ActionResponse {
+            id: "act_error_123".to_string(),
+            success: false,
+            result: None,
+            error: Some("Test error occurred".to_string()),
+            duration_ms: 100,
+            timestamp: "2025-01-01T00:00:01Z".to_string(),
+        };
+
+        executor.post_response(error_response).await?;
+
+        // Verify: mock recorded response post
+        let requests = mock.recorded_requests().await;
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].0, "POST");
+        assert_eq!(requests[0].1, "/api/v1/bridge/response");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_execute_unknown_action_type() -> Result<()> {
+        let test_dir =
+            tempfile::tempdir().map_err(|e| DesktopError::Internal(format!("temp dir: {}", e)))?;
+
+        let mock = MockSessionProxy::new();
+        let mock_clone = mock.clone();
+        let socket_path = start_mock_server(mock_clone).await;
+
+        let session = Session::new_for_testing(
+            socket_path.to_str().expect("socket path"),
+            test_dir.path().to_path_buf(),
+        )
+        .await?;
+
+        let machine_id = MachineId("test-machine-id-unknown".to_string());
+        let mut executor = ActionExecutor::new_for_testing(
+            Arc::new(tokio::sync::Mutex::new(session)),
+            Box::new(approval::MockApprovalPrompt::new(
+                approval::ApprovalMode::AlwaysApprove,
+            )),
+            machine_id,
+        );
+
+        let unknown_action = ActionRequest {
+            id: "act_unknown_type".to_string(),
+            r#type: "unknown_type".to_string(),
+            module_name: None,
+            action: None,
+            parameters: serde_json::json!({}),
+            user_id: "user_unknown".to_string(),
+            community_id: "comm_unknown".to_string(),
+            priority: 0,
+            timeout: 10,
+            created_at: "2025-01-01T00:00:00Z".to_string(),
+            expires_at: "2025-01-01T00:00:10Z".to_string(),
+        };
+
+        let result = executor.execute(unknown_action).await;
+
+        // Verify: unknown action type is rejected
+        assert!(!result.success, "unknown action type should fail");
+        assert!(
+            result.error.is_some(),
+            "should have error message for unknown type"
+        );
+        assert!(
+            result.error.unwrap().contains("unknown action type"),
+            "error message should mention unknown type"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_poll_with_timeout_action() -> Result<()> {
+        let test_dir =
+            tempfile::tempdir().map_err(|e| DesktopError::Internal(format!("temp dir: {}", e)))?;
+
+        let mock = MockSessionProxy::new();
+
+        // Create an action with short timeout
+        let poll_resp = serde_json::json!({
+            "actions": [{
+                "id": "act_timeout",
+                "type": "bash",
+                "module_name": null,
+                "action": null,
+                "parameters": {
+                    "source": "sleep 1 && echo done"
+                },
+                "user_id": "user_timeout",
+                "community_id": "comm_timeout",
+                "priority": 0,
+                "timeout": 1,
+                "created_at": "2025-01-01T00:00:00Z",
+                "expires_at": "2025-01-01T00:00:01Z"
+            }],
+            "next_poll": "2025-01-01T00:00:35Z",
+            "server_time": "2025-01-01T00:00:30Z",
+            "has_more": false,
+            "poll_count": 1
+        });
+        mock.set_proxy_response(200, poll_resp.to_string().into_bytes())
+            .await;
+
+        let mock_clone = mock.clone();
+        let socket_path = start_mock_server(mock_clone).await;
+
+        let session = Session::new_for_testing(
+            socket_path.to_str().expect("socket path"),
+            test_dir.path().to_path_buf(),
+        )
+        .await?;
+
+        let machine_id = MachineId("test-machine-id-timeout".to_string());
+        let mut executor = ActionExecutor::new_for_testing(
+            Arc::new(tokio::sync::Mutex::new(session)),
+            Box::new(approval::MockApprovalPrompt::new(
+                approval::ApprovalMode::AlwaysApprove,
+            )),
+            machine_id,
+        );
+
+        let poll_response = executor.poll().await?;
+
+        // Verify: poll returned the timeout action
+        assert_eq!(poll_response.actions.len(), 1);
+        assert_eq!(poll_response.actions[0].id, "act_timeout");
+        assert_eq!(poll_response.actions[0].timeout, 1);
+
+        Ok(())
+    }
 }
