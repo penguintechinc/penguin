@@ -47,6 +47,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # a plain HTTPS `curl` against public GitHub Release assets, which needs no
 # authentication for this public repo.
 
+# Non-root user for the build environment (devops-containers.md: rootless
+# containers are mandatory by default). rust:*-slim-bookworm installs
+# CARGO_HOME/RUSTUP_HOME world-readable+executable
+# under /usr/local, so any UID can run rustc/cargo without extra chown there.
+# /app is chowned so a plain `docker run` (no bind mount) is writable too; a
+# host bind mount (see README.md) is owned by the host UID instead, which is
+# why the README's docker run example passes --user $(id -u):$(id -g).
+RUN groupadd -r builder && useradd -r -m -g builder -d /home/builder -s /bin/bash builder \
+    && chown -R builder:builder /app
+USER builder
+
 # Verify Rust/cargo installation
 RUN rustc --version && cargo --version
 
