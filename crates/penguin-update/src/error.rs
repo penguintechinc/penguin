@@ -39,6 +39,13 @@ pub enum UpdateError {
     /// [`crate::release::GithubRelease`] expects.
     #[error("failed to parse GitHub releases API response: {0}")]
     Decode(#[source] serde_json::Error),
+    /// The `/releases` list for this repo contained no non-draft release
+    /// with a tag that parses as semver — see
+    /// [`crate::release::select_latest_release`]. Distinct from a bare empty
+    /// list: a repo with only draft releases, or only releases tagged with
+    /// something that isn't a version (`"nightly"`, ...), hits this too.
+    #[error("no published release with a valid semver tag was found for {0}")]
+    NoReleaseFound(String),
     /// The downloaded `.minisig` asset was not valid UTF-8 text.
     #[error("signature asset is not valid UTF-8 text")]
     InvalidSignatureEncoding,

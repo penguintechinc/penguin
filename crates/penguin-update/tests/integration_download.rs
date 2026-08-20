@@ -20,7 +20,12 @@
 //! extraction) is already covered end-to-end by `src/updater.rs`'s sibling
 //! modules' unit tests against synthetic data — this test's only job is to
 //! prove the GitHub API request/response shape assumed by
-//! [`crate::release::GithubRelease`] still matches reality.
+//! [`crate::release::GithubRelease`] still matches reality — including that
+//! `penguintechinc/penguin`'s only real release is currently published as a
+//! GitHub *prerelease* (`"prerelease": true`), which makes `/releases/latest`
+//! 404 against this repo and is exactly the state
+//! [`penguin_update::select_latest_release`] exists to handle correctly by
+//! reading the `/releases` list endpoint instead.
 
 use penguin_update::{UpdateConfig, Updater};
 
@@ -49,10 +54,11 @@ async fn check_against_the_real_penguin_repository_reports_a_release() {
         public_key: None,
     });
 
-    let (available, latest_version) = updater
-        .check()
-        .await
-        .expect("GitHub releases API request should succeed");
+    let (available, latest_version) = updater.check().await.expect(
+        "GitHub releases API request should succeed — this is exactly what regresses if \
+             `Updater` ever goes back to querying /releases/latest: that endpoint 404s against \
+             this repo today because its only real release (v1.0.0) is a GitHub prerelease",
+    );
 
     assert!(
         available,
@@ -62,4 +68,9 @@ async fn check_against_the_real_penguin_repository_reports_a_release() {
         !latest_version.is_empty(),
         "latest_version should be a real tag name"
     );
+    // Proves `select_latest_release` actually ran end-to-end against the real
+    // API response, not just that some string came back: the tag it picked
+    // must parse as semver once the leading `v` is stripped.
+    semver::Version::parse(penguin_update::normalize_version(&latest_version))
+        .expect("the selected release's tag should parse as semver");
 }
