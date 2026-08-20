@@ -100,10 +100,10 @@ pg_build_rust() {
         && cargo build -p penguin --example parity_probe --locked )
 }
 
-# Best-effort Go oracle build. The frozen Go tree needs the golang toolchain
-# the wire-compat/go-client-frozen CI jobs use; when it is absent (e.g. inside
-# the Rust-only penguin-rust:1.97 container) this is a NOTE, not a failure —
-# the Go-dependent checks then self-skip.
+# Best-effort Go oracle build. The frozen go-client/ tree has been removed
+# from this repository, so this always self-skips now (a NOTE, not a
+# failure) unless PENGUIN_GO/PENGUIND_GO are pointed at binaries built from a
+# go-client checkout kept elsewhere — the Go-dependent checks then self-skip.
 pg_build_go() {
     [ "${PG_SKIP_BUILD:-0}" = "1" ] && return 0
     if ! command -v go >/dev/null 2>&1; then

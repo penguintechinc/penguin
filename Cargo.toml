@@ -1,9 +1,10 @@
 # Penguin endpoint agent — Rust workspace root.
 #
-# The complete Go implementation is frozen under `go-client/` as its own Go
-# module (NOT a Cargo member) and serves as the feature-parity conformance
-# oracle. Every crate here is being ported to reach parity with it. See
-# ~/.claude/plans/create-a-plan-to-goofy-hopcroft.md for the full migration plan.
+# The Go→Rust migration is complete: every crate here reached feature parity
+# with the original Go implementation. The Go source tree (formerly frozen
+# under `go-client/` as a feature-parity conformance oracle) has been removed
+# — see git history and docs/PARITY.md for the record of deliberate Go/Rust
+# behavioural divergences.
 #
 # House style (learning-oriented): keep turbofish and match-arms/closures to a
 # minimum, prefer explicit types + named helpers + if-let, and document every
