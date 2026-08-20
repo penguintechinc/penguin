@@ -75,6 +75,35 @@ pub fn resolve_dispatch(
     })
 }
 
+/// Substitutes piped stdin content for a command's positional argument when
+/// none was parsed from the shell invocation — the mechanism that lets a
+/// leaf command whose `CommandSpec` declares `max_args: 0` (so clap rejects
+/// any literal shell token outright, see `crate::tree::args_positional`)
+/// still receive a value: `echo "$KEY" | penguin waddleai key set` or a
+/// hook shim piping its event JSON both resolve here.
+///
+/// A command that *does* declare a real positional (`max_args >= 1`) and
+/// actually received one is untouched — `piped_stdin` is only ever
+/// consulted when `args` came back empty. This exists specifically so a
+/// secret or a sensitive payload never has to transit as a literal CLI
+/// argument (readable in shell history and the process list for the
+/// command's lifetime) — see `penguin_module_waddleai::commands`'s `key
+/// set`/`hook` docs for the two call sites this was built for.
+pub fn apply_stdin_fallback(args: Vec<String>, piped_stdin: Option<String>) -> Vec<String> {
+    if !args.is_empty() {
+        return args;
+    }
+    match piped_stdin {
+        // A lone trailing newline is pipe/redirect noise (an `echo`, a text
+        // editor's final newline) rather than payload content — trimmed the
+        // same way shell command substitution (`$(...)`) strips it.
+        Some(content) if !content.is_empty() => {
+            vec![content.strip_suffix('\n').unwrap_or(&content).to_string()]
+        }
+        _ => Vec::new(),
+    }
+}
+
 /// The text to write to stdout and the process exit code to report once a
 /// `Dispatch` stream ends.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -140,6 +169,46 @@ mod tests {
     use super::*;
     use crate::tree::build_command_spec;
     use clap::Command;
+
+    #[test]
+    fn apply_stdin_fallback_uses_piped_content_when_no_args_were_parsed() {
+        let args = apply_stdin_fallback(Vec::new(), Some("wa-secretvalue".to_string()));
+        assert_eq!(args, vec!["wa-secretvalue".to_string()]);
+    }
+
+    #[test]
+    fn apply_stdin_fallback_trims_exactly_one_trailing_newline() {
+        let args = apply_stdin_fallback(Vec::new(), Some("payload\n".to_string()));
+        assert_eq!(args, vec!["payload".to_string()]);
+    }
+
+    #[test]
+    fn apply_stdin_fallback_preserves_internal_newlines_in_multiline_payloads() {
+        let args = apply_stdin_fallback(Vec::new(), Some("{\n  \"a\": 1\n}\n".to_string()));
+        assert_eq!(args, vec!["{\n  \"a\": 1\n}".to_string()]);
+    }
+
+    #[test]
+    fn apply_stdin_fallback_never_overrides_explicitly_parsed_args() {
+        let args = apply_stdin_fallback(
+            vec!["already-typed".to_string()],
+            Some("piped-content".to_string()),
+        );
+        assert_eq!(args, vec!["already-typed".to_string()]);
+    }
+
+    #[test]
+    fn apply_stdin_fallback_with_no_piped_content_stays_empty() {
+        assert_eq!(apply_stdin_fallback(Vec::new(), None), Vec::<String>::new());
+    }
+
+    #[test]
+    fn apply_stdin_fallback_with_empty_piped_content_stays_empty() {
+        assert_eq!(
+            apply_stdin_fallback(Vec::new(), Some(String::new())),
+            Vec::<String>::new()
+        );
+    }
 
     fn chunk(output: &str, r#final: bool, exit_code: i32) -> pb::DispatchChunk {
         pb::DispatchChunk {

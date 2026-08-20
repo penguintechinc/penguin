@@ -47,6 +47,11 @@ penguin-module-waddlebot = { path = "crates/penguin-module-waddlebot" }
 # Built-in modules for M6+ (squawk, tobogganing — Go porting milestones).
 penguin-module-squawk = { path = "crates/penguin-module-squawk" }
 penguin-module-tobogganing = { path = "crates/penguin-module-tobogganing" }
+# waddleai: the desktop-side companion to WaddleAI's agent-hooks feature —
+# installs per-ecosystem hook shims, holds the connection/credential, and
+# reports telemetry. Policy decisions stay server-side; see the crate's own
+# top-level doc.
+penguin-module-waddleai = { path = "crates/penguin-module-waddleai" }
 # The pure tray menu model, consumed by the penguin-tray platform shells (M7.3).
 penguin-tray-model = { path = "crates/penguin-tray-model" }
 # Desktop client (Phase 2a): IPC wrapper + keychain + OAuth glue for the Tauri shell.
@@ -159,6 +164,13 @@ nix = { version = "0.30", features = ["user", "fs"] }
 # Low-level Unix system calls (ioctl, open, etc.) for TUN device creation in
 # the userspace WireGuard backend.
 libc = "0.2"
+# Cross-platform config/home directory resolution (XDG on Linux, Known
+# Folders on Windows, Standard Directories on macOS) for locating the
+# per-ecosystem hook config files penguin-module-waddleai installs into
+# (`~/.claude/settings.json`, `~/.gemini/config/hooks.json`, VS Code's user
+# settings). Already used by `desktop/src-tauri` (excluded from this
+# workspace) for the same purpose.
+dirs = "6.0.0"
 
 # OS keychain backends (Windows Credential Manager, macOS Keychain, Linux
 # Secret Service). Unlike Go's 99designs/keyring this crate has NO encrypted

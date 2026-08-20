@@ -7,6 +7,10 @@
 //! no Go left in it. `waddlebot` is the third: a CLI-over-API surface over
 //! the waddlebot hub (its local integration bridge is a separate, later
 //! track — see `penguin_module_waddlebot::WaddlebotModule::start_bridge`).
+//! `waddleai` is the fourth: the desktop-side companion to WaddleAI's
+//! agent-hooks feature — shim installation, credential storage, and
+//! telemetry only, never policy (see
+//! `penguin_module_waddleai::WaddleAiModule`'s top-level doc).
 
 use std::collections::BTreeMap;
 
@@ -23,6 +27,7 @@ pub fn builtin_modules() -> BTreeMap<String, Factory> {
         penguin_module_tobogganing::factory,
     );
     registry.insert("waddlebot".to_string(), penguin_module_waddlebot::factory);
+    registry.insert("waddleai".to_string(), penguin_module_waddleai::factory);
     registry
 }
 
@@ -84,6 +89,27 @@ mod tests {
         assert!(
             info.license_feature.is_empty(),
             "gating waddlebot behind a license entitlement is a deliberate future decision, not defaulted here"
+        );
+    }
+
+    #[test]
+    fn waddleai_is_registered_as_a_builtin() {
+        let registry = builtin_modules();
+        assert!(registry.contains_key("waddleai"));
+    }
+
+    #[test]
+    fn waddleai_factory_reports_its_own_identity_before_init() {
+        let registry = builtin_modules();
+        let factory = registry.get("waddleai").expect("waddleai registered");
+        let info = factory().info();
+        assert_eq!(info.name, "waddleai");
+        assert_eq!(info.version, "1.0.0");
+        assert!(
+            info.license_feature.is_empty(),
+            "the module itself (shim install/status/telemetry) must load with no license \
+             server reachable; the WaddleAI product entitlement is checked server-side when a \
+             forwarded hook event is evaluated, not at module load time"
         );
     }
 }
