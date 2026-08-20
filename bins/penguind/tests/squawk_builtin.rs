@@ -484,11 +484,11 @@ async fn squawk_builtin_loads_and_operates_through_the_real_daemon_stack() {
     let families = stack.telemetry.registry().gather();
     let names: Vec<&str> = families.iter().map(|f| f.name()).collect();
     for expected in [
-        "penguin_module_squawk_squawk_queries_total",
-        "penguin_module_squawk_squawk_forwarder_up",
-        "penguin_module_squawk_squawk_cache_entries",
-        "penguin_module_squawk_squawk_dns_applied",
-        "penguin_module_squawk_squawk_health_status",
+        "penguin_module_squawk_queries_total",
+        "penguin_module_squawk_forwarder_up",
+        "penguin_module_squawk_cache_entries",
+        "penguin_module_squawk_dns_applied",
+        "penguin_module_squawk_health_status",
     ] {
         assert!(
             names.contains(&expected),
