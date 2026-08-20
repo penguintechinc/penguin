@@ -3642,6 +3642,7 @@ dependencies = [
  "reqwest",
  "rustls",
  "self-replace",
+ "semver",
  "serde",
  "serde_json",
  "tar",
