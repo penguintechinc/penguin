@@ -208,6 +208,12 @@ service-manager = "0.7"
 # Self-update: swap the running binary in place after minisign verification.
 # minisign-verify + reqwest are already in the graph (extplugin / license).
 self-replace = "1"
+# Selects the newest release by semver among GitHub's `/releases` list
+# (never `/releases/latest` — see `penguin-update::release`'s doc comment for
+# why). Already resolves to the version already in the lock via
+# `rustc_version`'s transitive dependency, so this adds no new crate version
+# to the graph, only a direct name for one already being built.
+semver = "1"
 # Release assets are tar.gz (Linux/macOS) or zip (Windows) per goreleaser's
 # name_template; the updater extracts the binary from whichever the target OS
 # ships. Go only implemented tar+gzip, silently breaking Windows updates.
