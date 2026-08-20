@@ -45,6 +45,8 @@ mod verify;
 pub use archive::ArchiveError;
 pub use error::UpdateError;
 pub use platform::{Arch, ArchiveFormat, Os, asset_filename, binary_filename, normalize_version};
-pub use release::{GithubAsset, GithubRelease, SelectError, SelectedAsset, select_asset};
+pub use release::{
+    GithubAsset, GithubRelease, SelectError, SelectedAsset, select_asset, select_latest_release,
+};
 pub use updater::{UpdateConfig, Updater};
 pub use verify::VerifyError;
