@@ -1,9 +1,11 @@
 # Parity with the frozen Go client
 
-The Rust agent targets **100% feature parity** with the Go implementation frozen
-at [`go-client/`](../go-client/), *plus* completion of behaviours Go left
-stubbed. This document records every place the Rust build deliberately does
-**not** match Go, and why.
+The Rust agent targets **100% feature parity** with the original Go
+implementation, *plus* completion of behaviours Go left stubbed. The Go
+implementation was kept frozen as a conformance oracle through the rewrite and
+has since been removed from this repository (dependabot noise on a
+permanently-frozen module); this document remains the historical record of
+every place the Rust build deliberately does **not** match Go, and why.
 
 It is written as we go rather than reconstructed at the end, because the reason
 for a divergence is obvious the day it is made and archaeology a month later.
