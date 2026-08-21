@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  WiX v5 installer for the Penguin Endpoint Agent (penguind daemon + penguin CLI),
+  WiX v5 installer for the Penguin Endpoint Agent (penguind daemon + pdcli CLI),
   Rust build. Ported from go-client/packaging/windows/penguind.wxs — the
   directives below match that file line-for-line; only the staging-source
   comment changed (cargo output, not `go build` output).
@@ -16,7 +16,7 @@
     wix build packaging/windows/penguind.wxs \
       -d Version=<x.y.z> -b <dir-with-exes> -arch x64 -o penguind.msi
 
-  The staging dir passed with -b must contain penguind.exe and penguin.exe:
+  The staging dir passed with -b must contain penguind.exe and pdcli.exe:
   a release-profile `cargo build` for target x86_64-pc-windows-msvc, copied
   there by the release-windows-msi workflow (not GOOS=windows/CGO_ENABLED=0
   as the Go build produced them).
@@ -66,7 +66,7 @@
 
         <!-- CLI: installed to the same directory (no service). -->
         <Component Id="penguin_exe" Bitness="always64">
-          <File Id="penguin_exe" Source="penguin.exe" KeyPath="yes" />
+          <File Id="penguin_exe" Source="pdcli.exe" KeyPath="yes" />
         </Component>
 
       </Directory>

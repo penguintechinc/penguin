@@ -54,8 +54,8 @@ jobs:
 
       - name: Build the Rust binaries + the raw wire probe
         run: |
-          cargo build -p penguind -p penguin --locked
-          cargo build -p penguin --example parity_probe --locked
+          cargo build -p penguind -p pdcli --locked
+          cargo build -p pdcli --example parity_probe --locked
 
       - name: Run the parity harness (gating gates)
         env:

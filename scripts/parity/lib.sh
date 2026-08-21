@@ -26,7 +26,7 @@ PG_TARGET_DIR="${CARGO_TARGET_DIR:-$PG_ROOT/target}"
 
 # Binaries under test — overridable so CI can point at release builds.
 PENGUIND="${PENGUIND:-$PG_TARGET_DIR/debug/penguind}"
-PENGUIN_RS="${PENGUIN_RS:-$PG_TARGET_DIR/debug/penguin}"
+PENGUIN_RS="${PENGUIN_RS:-$PG_TARGET_DIR/debug/pdcli}"
 PROBE="${PROBE:-$PG_TARGET_DIR/debug/examples/parity_probe}"
 PENGUIN_GO="${PENGUIN_GO:-$PG_ROOT/go-client/bin/penguin}"
 PENGUIND_GO="${PENGUIND_GO:-$PG_ROOT/go-client/bin/penguind}"
@@ -96,8 +96,8 @@ pg_have_go_daemon() { [ -x "$PENGUIND_GO" ]; }
 # for iterating on the scripts against an already-built tree.
 pg_build_rust() {
     [ "${PG_SKIP_BUILD:-0}" = "1" ] && return 0
-    ( cd "$PG_ROOT" && cargo build -p penguind -p penguin --locked \
-        && cargo build -p penguin --example parity_probe --locked )
+    ( cd "$PG_ROOT" && cargo build -p penguind -p pdcli --locked \
+        && cargo build -p pdcli --example parity_probe --locked )
 }
 
 # Best-effort Go oracle build. The frozen go-client/ tree has been removed

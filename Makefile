@@ -132,7 +132,7 @@ test-security: tools ## Supply-chain and advisory scans
 	$(CARGO) audit
 
 smoke-test: build ## Build, then check each binary answers --version
-	@for bin in penguind penguin penguin-tray; do \
+	@for bin in penguind pdcli penguin-tray; do \
 		if [ -x target/debug/$$bin ]; then \
 			echo "smoke: $$bin"; target/debug/$$bin --version >/dev/null || exit 1; \
 		else \

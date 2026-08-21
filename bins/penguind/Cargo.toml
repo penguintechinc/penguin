@@ -23,7 +23,7 @@ penguin-proto.workspace = true
 # DaemonHostFactory (see src/daemon_main.rs and src/host_wiring.rs). Not
 # workspace dependencies yet (only added there per-milestone as each crate
 # lands), so referenced by path — same convention as penguin-cli-core in
-# bins/penguin/Cargo.toml.
+# bins/pdcli/Cargo.toml.
 penguin-secrets = { path = "../../crates/penguin-secrets" }
 penguin-licensing = { path = "../../crates/penguin-licensing" }
 # Built-in module registry (squawk, and future built-ins) — see

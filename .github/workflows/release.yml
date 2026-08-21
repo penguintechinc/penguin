@@ -1,4 +1,4 @@
-# Release: on a version tag, build penguind + penguin for every target,
+# Release: on a version tag, build penguind + pdcli for every target,
 # package deb/rpm, generate an SBOM per archive, sign everything (minisign for
 # the in-app self-updater + cosign for provenance), and publish to the GitHub
 # Release. Replaces the goreleaser-driven go-client/.goreleaser.yaml now that
@@ -46,7 +46,7 @@ jobs:
       - id: v
         run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
-  # Builds penguind + penguin for every (os, arch) pair and packages them into
+  # Builds penguind + pdcli for every (os, arch) pair and packages them into
   # the exact archive name crates/penguin-update/src/platform.rs::asset_filename
   # builds when checking for updates: penguin_<version>_<os>_<arch>.<ext>,
   # <os> in {linux, darwin, windows} (NOT Rust's own darwin/macos spelling —
@@ -138,9 +138,9 @@ jobs:
           chmod +x "$RUNNER_TEMP/protoc/bin/protoc"
           echo "$RUNNER_TEMP/protoc/bin" >> "$GITHUB_PATH"
 
-      - name: Build penguind + penguin
+      - name: Build penguind + pdcli
         shell: bash
-        run: cargo build --release --locked --target ${{ matrix.target }} -p penguind -p penguin
+        run: cargo build --release --locked --target ${{ matrix.target }} -p penguind -p pdcli
 
       - name: Compute asset filename
         id: asset
@@ -154,24 +154,26 @@ jobs:
         shell: bash
         run: |
           mkdir -p stage
-          cp "target/${{ matrix.target }}/release/penguind" "target/${{ matrix.target }}/release/penguin" stage/
+          cp "target/${{ matrix.target }}/release/penguind" stage/
+          cp "target/${{ matrix.target }}/release/pdcli" stage/
 
       - name: Stage binaries (Windows)
         if: runner.os == 'Windows'
         shell: bash
         run: |
           mkdir -p stage
-          cp "target/${{ matrix.target }}/release/penguind.exe" "target/${{ matrix.target }}/release/penguin.exe" stage/
+          cp "target/${{ matrix.target }}/release/penguind.exe" stage/
+          cp "target/${{ matrix.target }}/release/pdcli.exe" stage/
 
       - name: Create archive (tar.gz)
         if: matrix.archive_ext == 'tar.gz'
         shell: bash
-        run: tar -czf "${{ steps.asset.outputs.name }}" -C stage penguind penguin
+        run: tar -czf "${{ steps.asset.outputs.name }}" -C stage penguind pdcli
 
       - name: Create archive (zip)
         if: matrix.archive_ext == 'zip'
         shell: pwsh
-        run: Compress-Archive -Path stage/penguind.exe, stage/penguin.exe -DestinationPath "${{ steps.asset.outputs.name }}"
+        run: Compress-Archive -Path stage/penguind.exe, stage/pdcli.exe -DestinationPath "${{ steps.asset.outputs.name }}"
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
