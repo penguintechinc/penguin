@@ -13,6 +13,15 @@ WORKDIR /app
 # - ca-certificates: TLS roots for `curl`, needed by scripts/fetch-webui.sh
 #   (invoked automatically via tauri.conf.json's beforeBuildCommand) to fetch
 #   the published waddlebot webui dist over HTTPS
+# Unpinned apt package versions: this is a local/CI build-tool image (compiles
+# the Tauri app; never deployed as a running service — see README.md
+# "Docker (full build environment)"), not a customer-distributed artifact.
+# The base image is SHA256-pinned above; supply-chain integrity comes from
+# Debian's signed apt repos, not per-package version pins. Pinning webkit2gtk/
+# gtk/dbus dev-package versions here would make the image break every time
+# Debian bookworm rotates a point release, for no security benefit on a
+# throwaway build container.
+# hadolint ignore=DL3008
 RUN apt-get update && apt-get install -y --no-install-recommends \
     cmake \
     curl \
@@ -37,6 +46,22 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # already present in this image; it prefers `gh` if present but falls back to
 # a plain HTTPS `curl` against public GitHub Release assets, which needs no
 # authentication for this public repo.
+
+# Non-root user for the build environment (devops-containers.md: rootless
+# containers are mandatory by default). rust:*-slim-bookworm installs
+# CARGO_HOME/RUSTUP_HOME world-readable+executable
+# under /usr/local, so any UID can run rustc/cargo without extra chown there.
+# /app is chowned so a plain `docker run` (no bind mount) is writable too; a
+# host bind mount (see README.md) is owned by the host UID instead, which is
+# why the README's docker run example passes --user $(id -u):$(id -g).
+RUN groupadd -r builder && useradd -r -m -g builder -d /home/builder -s /bin/bash builder \
+    && chown -R builder:builder /app
+# DL3066 flags non-numeric USER as unresolvable on the host, but this image
+# creates `builder` via useradd immediately above, so /etc/passwd resolves it
+# inside the container; a numeric UID would only trade away the readability of
+# a named user for no portability gain here.
+# hadolint ignore=DL3066
+USER builder
 
 # Verify Rust/cargo installation
 RUN rustc --version && cargo --version

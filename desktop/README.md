@@ -166,9 +166,16 @@ dist is fetched/verified automatically — no separate manual step.
 
 ### Docker (full build environment)
 
+The image runs as a non-root `builder` user (see `Dockerfile`), not the host
+user's UID/GID. Bind-mounting the repo without `--user` leaves the container
+unable to write into `/app` (permission denied) since ownership comes from
+the host-side directory, not the image. Pass `--user $(id -u):$(id -g)` to
+match the host UID — same pattern the root `Makefile`'s `docker-%` targets
+use for the main Rust workspace image:
+
 ```bash
 docker build -f Dockerfile -t penguin-desktop-builder .
-docker run -it -v $(pwd):/app penguin-desktop-builder bash
+docker run -it --user $(id -u):$(id -g) -v $(pwd):/app penguin-desktop-builder bash
 # Inside container:
 cd /app && npm install && cargo tauri build
 ```

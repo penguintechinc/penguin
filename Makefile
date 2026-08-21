@@ -81,13 +81,21 @@ COVER_EXCLUDE_BOUNDARY := (penguin-ipc/src/(listen|dial)_(unix|windows)\.rs|peng
 COVER_IGNORE_UNIT := $(COVER_EXCLUDE_ALWAYS)|$(COVER_EXCLUDE_BOUNDARY)
 COVER_IGNORE_INT := $(COVER_EXCLUDE_ALWAYS)
 
-.PHONY: help build test test-unit test-integration test-integration-cover \
+.PHONY: help setup build test test-unit test-integration test-integration-cover \
         lint format test-security smoke-test clean proto \
-        pre-commit parity docker-image docker-volumes tools
+        pre-commit parity docker-image docker-volumes tools install-hooks verify-hooks
 
 help: ## Show available targets
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
 		| awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-24s\033[0m %s\n", $$1, $$2}'
+
+setup: tools install-hooks ## Bootstrap local dev environment (cargo subcommands + git hooks)
+
+install-hooks: ## Install the pre-commit framework and register pre-commit + pre-push hooks
+	@./scripts/install-pre-commit.sh
+
+verify-hooks: ## Report whether pre-commit/pre-push hooks are installed and non-empty
+	@./scripts/install-pre-commit.sh --verify
 
 build: ## Build every crate and binary
 	$(CARGO) build --workspace --locked

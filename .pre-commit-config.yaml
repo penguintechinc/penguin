@@ -1,0 +1,115 @@
+# PenguinTech standard git hooks for the `penguin` desktop client.
+#
+# Install:  make install-hooks
+# Run all:  pre-commit run --all-files
+#
+# Two stages, matching devops.md "Git Hooks (Mandatory)":
+#   pre-commit — fast checks only (<30s), blocks the commit
+#   pre-push   — heavier security scans, blocks the push
+#
+# Stacks in this repo (see docs/APP_STANDARDS.md):
+#   Rust (root workspace: crates/*, bins/*, examples/plugin-hello-rs) — primary
+#   Node/TS (desktop/) — Tauri shell only; the React SPA it bundles is built in
+#     penguintechinc/waddlebot and pulled in as a pinned prebuilt dist artifact
+#     (see desktop/webui.lock). There is no local .ts/.tsx source under
+#     desktop/ to lint, so no eslint hook is wired here.
+#   desktop/src-tauri is its own Cargo workspace (excluded from the root
+#     workspace via Cargo.toml's `exclude`) and is not yet built or linted by
+#     any CI job — left ungated here too, to avoid a local-only check with no
+#     CI parity. Wire it in (own rust-fmt/rust-clippy pair, files scoped to
+#     ^desktop/src-tauri/) when it's added to CI.
+#
+# Revs are pinned. Update deliberately via `pre-commit autoupdate` or
+# Renovate/Dependabot, never by floating to a branch.
+default_install_hook_types: [pre-commit, pre-push]
+default_stages: [pre-commit]
+
+repos:
+  # ── Hygiene ────────────────────────────────────────────────────────────────
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-merge-conflict
+      - id: check-case-conflict
+      - id: check-added-large-files
+        args: [--maxkb=1024]
+      - id: check-yaml
+        args: [--allow-multiple-documents]
+      - id: check-json
+      - id: check-executables-have-shebangs
+      - id: detect-private-key
+        # crates/squawk-client/src/pem.rs:241 is a unit-test fixture with a
+        # deliberately invalid base64 body ("!!!not-valid-base64!!!") used to
+        # exercise PEM-parse error handling — not real key material. Already
+        # independently reviewed and suppressed for gitleaks in
+        # .gitleaksignore (private-key:241, reviewed 2026-08-10); this exclude
+        # applies the same reviewed conclusion to this second, separate
+        # secret-scanning tool.
+        exclude: ^crates/squawk-client/src/pem\.rs$
+
+  # ── Secrets (mandatory, every repo — this one ships to customers, see
+  #    client.md: ZERO secrets in distributed builds) ──────────────────────────
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.21.2
+    hooks:
+      - id: gitleaks
+
+  # ── Shell (Bash must stay 3.2-compatible — see general.md) ─────────────────
+  - repo: https://github.com/koalaman/shellcheck-precommit
+    rev: v0.10.0
+    hooks:
+      - id: shellcheck
+        args: [--severity=warning]
+
+  # ── Dockerfiles ────────────────────────────────────────────────────────────
+  - repo: https://github.com/hadolint/hadolint
+    rev: v2.13.1-beta
+    hooks:
+      - id: hadolint-docker
+
+  # ── GitHub Actions ─────────────────────────────────────────────────────────
+  # Scoped to *.yml/*.yaml under workflows/ — the bare `^.github/workflows/`
+  # prefix upstream ships by default also matches non-workflow files that
+  # happen to live in that directory (this repo has .github/workflows/.ansible-lint,
+  # an ansible-lint config with no workflow structure at all).
+  - repo: https://github.com/rhysd/actionlint
+    rev: v1.7.4
+    hooks:
+      - id: actionlint
+        files: ^\.github/workflows/.*\.ya?ml$
+
+  # ── Rust — root workspace (crates/*, bins/*, examples/plugin-hello-rs) ─────
+  # Reuses the existing `make lint` / `make test-security` targets, docker-
+  # wrapped: `lint`/`test-security` run cargo directly, which per this repo's
+  # own Makefile policy is only valid inside a container (CI's pinned
+  # rust:$(RUST_VERSION)-bookworm job container, or `make docker-<target>`
+  # locally) — a contributor workstation is never expected to have cargo on
+  # PATH. Using the docker- prefix here keeps the hook and CI on the same
+  # flag sets without requiring host cargo.
+  - repo: local
+    hooks:
+      - id: rust-lint
+        name: Rust lint (cargo fmt --check + clippy -D warnings)
+        entry: make docker-lint
+        language: system
+        files: ^(crates|bins|examples)/.*\.rs$|^Cargo\.(toml|lock)$|^Makefile$
+        pass_filenames: false
+      - id: rust-security
+        name: Rust supply-chain scan (cargo deny + cargo audit)
+        entry: make docker-test-security
+        language: system
+        files: ^(crates|bins|examples)/.*\.rs$|^Cargo\.(toml|lock)$|^deny\.toml$|^Makefile$
+        pass_filenames: false
+        stages: [pre-push]
+
+  # ── Dockerfile rootless check (devops-containers.md) ────────────────────────
+  - repo: local
+    hooks:
+      - id: dockerfile-rootless
+        name: Dockerfile runs as non-root
+        entry: scripts/hooks/check-dockerfile-rootless.sh
+        language: script
+        files: (^|/)Dockerfile[^/]*$
+        stages: [pre-push]
