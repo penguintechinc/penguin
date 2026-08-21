@@ -1,15 +1,12 @@
-# Dependabot for the penguin repo: the Rust workspace (root), the frozen Go
-# client (go-client/), and pinned GitHub Actions.
+# Dependabot for the penguin repo: the Rust workspace (root) and pinned
+# GitHub Actions. The frozen go-client/ Go module was removed (its go.mod
+# only ever generated stale bump PRs against code that would never accept
+# them) — see git history for the gomod ecosystem entry that tracked it.
 version: 2
 updates:
   # Rust workspace dependencies.
   - package-ecosystem: "cargo"
     directory: "/"
-    schedule:
-      interval: "weekly"
-  # Frozen Go client module.
-  - package-ecosystem: "gomod"
-    directory: "/go-client"
     schedule:
       interval: "weekly"
   # Keep pinned GitHub Actions commit SHAs current.

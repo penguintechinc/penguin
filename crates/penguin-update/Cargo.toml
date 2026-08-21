@@ -32,6 +32,9 @@ tempfile = "3"
 tar.workspace = true
 flate2.workspace = true
 zip.workspace = true
+# Picks the newest non-draft release by semver out of GitHub's `/releases`
+# list — see `release::select_latest_release`'s doc comment.
+semver.workspace = true
 # Verify-only minisign signature checking — same choice and same exact pin
 # as `penguin-extplugin`'s own `verify.rs` (see that crate's doc comment for
 # why signing never happens in production code). Not a workspace dependency

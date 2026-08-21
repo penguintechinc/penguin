@@ -19,3 +19,4 @@ penguin-sdk.workspace = true
 penguin-module-squawk = { path = "../penguin-module-squawk" }
 penguin-module-tobogganing = { path = "../penguin-module-tobogganing" }
 penguin-module-waddlebot.workspace = true
+penguin-module-waddleai.workspace = true

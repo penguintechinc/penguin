@@ -9,7 +9,6 @@
 #
 # Stacks in this repo (see docs/APP_STANDARDS.md):
 #   Rust (root workspace: crates/*, bins/*, examples/plugin-hello-rs) — primary
-#   Go   (go-client/ — frozen feature-parity reference client)
 #   Node/TS (desktop/) — Tauri shell only; the React SPA it bundles is built in
 #     penguintechinc/waddlebot and pulled in as a pinned prebuilt dist artifact
 #     (see desktop/webui.lock). There is no local .ts/.tsx source under
@@ -82,38 +81,26 @@ repos:
         files: ^\.github/workflows/.*\.ya?ml$
 
   # ── Rust — root workspace (crates/*, bins/*, examples/plugin-hello-rs) ─────
-  # Reuses the existing `make lint` / `make test-security` targets so the hook
-  # and CI can never drift onto different flag sets.
+  # Reuses the existing `make lint` / `make test-security` targets, docker-
+  # wrapped: `lint`/`test-security` run cargo directly, which per this repo's
+  # own Makefile policy is only valid inside a container (CI's pinned
+  # rust:$(RUST_VERSION)-bookworm job container, or `make docker-<target>`
+  # locally) — a contributor workstation is never expected to have cargo on
+  # PATH. Using the docker- prefix here keeps the hook and CI on the same
+  # flag sets without requiring host cargo.
   - repo: local
     hooks:
       - id: rust-lint
         name: Rust lint (cargo fmt --check + clippy -D warnings)
-        entry: make lint
+        entry: make docker-lint
         language: system
         files: ^(crates|bins|examples)/.*\.rs$|^Cargo\.(toml|lock)$|^Makefile$
         pass_filenames: false
       - id: rust-security
         name: Rust supply-chain scan (cargo deny + cargo audit)
-        entry: make test-security
+        entry: make docker-test-security
         language: system
         files: ^(crates|bins|examples)/.*\.rs$|^Cargo\.(toml|lock)$|^deny\.toml$|^Makefile$
-        pass_filenames: false
-        stages: [pre-push]
-
-  # ── Go — go-client/ (frozen reference client, own go.mod) ──────────────────
-  - repo: local
-    hooks:
-      - id: go-client-lint
-        name: go-client lint (golangci-lint)
-        entry: make -C go-client lint
-        language: system
-        files: ^go-client/.*\.go$|^go-client/go\.(mod|sum)$|^go-client/\.golangci\.ya?ml$|^go-client/Makefile$
-        pass_filenames: false
-      - id: go-client-security
-        name: go-client security scan (gosec + govulncheck)
-        entry: make -C go-client test-security
-        language: system
-        files: ^go-client/.*\.go$|^go-client/go\.(mod|sum)$|^go-client/Makefile$
         pass_filenames: false
         stages: [pre-push]
 

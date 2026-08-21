@@ -1,10 +1,11 @@
 # Config schema-conformance corpus
 
-Shared, language-neutral fixtures that pin **identical JSON-Schema validation
-verdicts** between the Rust config store (`penguin-daemon::config`, jsonschema
-0.47) and the frozen Go config store (`go-client/internal/daemon`,
-santhosh-tekuri/jsonschema v6). This is a permanent CI fixture — the two engines
-must agree on every case.
+Shared, language-neutral fixtures that originally pinned **identical
+JSON-Schema validation verdicts** between the Rust config store
+(`penguin-daemon::config`, jsonschema 0.47) and the frozen Go config store
+(santhosh-tekuri/jsonschema v6). The frozen Go client has since been removed
+from this repository, so the Go harness below no longer runs; the fixtures
+remain in place as the Rust config store's own regression corpus.
 
 ## Format
 
@@ -38,4 +39,4 @@ deliberately excluded — that is the whole point of the parity gate.
 ## Harnesses
 
 - Rust: `crates/penguin-daemon/tests/config_corpus.rs`
-- Go (oracle): `go-client/internal/daemon/corpus_conformance_test.go`
+- Go (oracle, removed): formerly `go-client/internal/daemon/corpus_conformance_test.go`

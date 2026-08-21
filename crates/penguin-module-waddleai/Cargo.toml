@@ -1,0 +1,61 @@
+[package]
+name = "penguin-module-waddleai"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+# The Module contract this crate implements (`Module`, `HostServices`,
+# `SecretStore`, ...).
+penguin-sdk.workspace = true
+
+async-trait.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+# CancellationToken for the background denylist-sync task's shutdown on
+# `stop` — same pattern squawk's forwarder and waddlebot's bridge use.
+tokio-util.workspace = true
+tracing.workspace = true
+# Registers this module's collectors into the shared daemon registry via
+# `penguin_sdk::Metrics`.
+prometheus.workspace = true
+
+serde.workspace = true
+# YAML parsing of the module's own on-disk config — same crate
+# penguin-daemon's ConfigStore and every other built-in module use, so all
+# engines agree on the YAML -> JSON bridge.
+serde-norway.workspace = true
+serde_json.workspace = true
+
+# WaddleAI server HTTP client (health probe, denylist fetch, hook-event
+# forwarding). Default features off — see the workspace dependency's own
+# comment: the workspace is pinned to aws-lc-rs everywhere for the
+# go-plugin P-521 work, so TLS is wired manually with rustls +
+# webpki-roots, matching waddlebot-client/squawk-client.
+reqwest = { workspace = true, features = ["query"] }
+rustls.workspace = true
+webpki-roots.workspace = true
+
+# Cross-platform home/config directory resolution for locating the
+# per-ecosystem hook shim files this crate installs into.
+dirs.workspace = true
+# Random temp-file suffixes for `fsutil::write_atomic` — same use as
+# `penguin_daemon::state`'s identical helper.
+rand.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+# Schema-compiles-and-accepts-its-own-defaults tests only; not needed at
+# runtime (the daemon's own `penguin-daemon::config::ConfigStore` is what
+# actually validates a module's config against this schema in production) —
+# same rationale as every other built-in module's identical dev-dependency.
+jsonschema.workspace = true
+# Rustls crypto provider initialization for the reqwest client built in
+# tests — same requirement as waddlebot-client's own tests.
+rustls.workspace = true

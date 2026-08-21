@@ -119,10 +119,12 @@ impl Updater {
         install(extracted).await
     }
 
-    /// `GET /repos/{repo}/releases/latest`, parsed into [`GithubRelease`].
+    /// `GET /repos/{repo}/releases` (the list endpoint, NOT `/releases/latest`
+    /// — see [`release::select_latest_release`]'s doc comment for why),
+    /// reduced to the newest non-draft release by semver.
     async fn fetch_latest_release(&self) -> Result<GithubRelease, UpdateError> {
         let url = format!(
-            "{GITHUB_API_BASE}/repos/{repo}/releases/latest",
+            "{GITHUB_API_BASE}/repos/{repo}/releases",
             repo = self.config.repo
         );
         let response = self
@@ -139,7 +141,10 @@ impl Updater {
             return Err(UpdateError::HttpStatus(status));
         }
 
-        serde_json::from_slice(&body).map_err(UpdateError::Decode)
+        let releases: Vec<GithubRelease> =
+            serde_json::from_slice(&body).map_err(UpdateError::Decode)?;
+        release::select_latest_release(releases)
+            .ok_or_else(|| UpdateError::NoReleaseFound(self.config.repo.clone()))
     }
 
     /// Downloads `url`'s raw bytes (the archive, or a signature file).
