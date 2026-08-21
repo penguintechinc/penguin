@@ -96,8 +96,8 @@ pg_have_go_daemon() { [ -x "$PENGUIND_GO" ]; }
 # for iterating on the scripts against an already-built tree.
 pg_build_rust() {
     [ "${PG_SKIP_BUILD:-0}" = "1" ] && return 0
-    ( cd "$PG_ROOT" && cargo build -p penguind -p penguin --locked \
-        && cargo build -p penguin --example parity_probe --locked )
+    ( cd "$PG_ROOT" && cargo build -p penguind -p pdcli --locked \
+        && cargo build -p pdcli --example parity_probe --locked )
 }
 
 # Best-effort Go oracle build. The frozen go-client/ tree has been removed
