@@ -1,6 +1,7 @@
 // Desktop client user-session hub proxy service.
-// Separate from daemon.proto to avoid proto-drift conflicts — the daemon.proto
-// must remain byte-identical to the frozen go-client copy per CI's proto-drift gate.
+// Separate from daemon.proto — historically to avoid proto-drift conflicts with
+// the frozen go-client copy (that CI gate and the go-client tree it compared
+// against have since been removed); kept separate on its own merits now.
 // This service multiplexes onto the daemon's UDS gRPC server via tonic's service router.
 syntax = "proto3";
 

@@ -3,8 +3,9 @@
 `grpc_broker.proto`, `grpc_controller.proto`, and `grpc_stdio.proto` are
 vendored **verbatim, with their MPL-2.0 headers intact**, from
 [hashicorp/go-plugin](https://github.com/hashicorp/go-plugin) **v1.7.0**
-(`internal/plugin/`). That is the exact version the frozen Go client depends on
-(`go-client/go.mod`), which is what makes wire compatibility checkable.
+(`internal/plugin/`). That is the exact version the (now-removed) frozen Go
+client depended on, which is what made wire compatibility checkable during the
+Go→Rust migration.
 
 ## Why they are here
 

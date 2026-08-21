@@ -1,9 +1,10 @@
 # Penguin endpoint agent — Rust workspace root.
 #
-# The complete Go implementation is frozen under `go-client/` as its own Go
-# module (NOT a Cargo member) and serves as the feature-parity conformance
-# oracle. Every crate here is being ported to reach parity with it. See
-# ~/.claude/plans/create-a-plan-to-goofy-hopcroft.md for the full migration plan.
+# The Go→Rust migration is complete: every crate here reached feature parity
+# with the original Go implementation. The Go source tree (formerly frozen
+# under `go-client/` as a feature-parity conformance oracle) has been removed
+# — see git history and docs/PARITY.md for the record of deliberate Go/Rust
+# behavioural divergences.
 #
 # House style (learning-oriented): keep turbofish and match-arms/closures to a
 # minimum, prefer explicit types + named helpers + if-let, and document every
@@ -47,6 +48,11 @@ penguin-module-waddlebot = { path = "crates/penguin-module-waddlebot" }
 # Built-in modules for M6+ (squawk, tobogganing — Go porting milestones).
 penguin-module-squawk = { path = "crates/penguin-module-squawk" }
 penguin-module-tobogganing = { path = "crates/penguin-module-tobogganing" }
+# waddleai: the desktop-side companion to WaddleAI's agent-hooks feature —
+# installs per-ecosystem hook shims, holds the connection/credential, and
+# reports telemetry. Policy decisions stay server-side; see the crate's own
+# top-level doc.
+penguin-module-waddleai = { path = "crates/penguin-module-waddleai" }
 # The pure tray menu model, consumed by the penguin-tray platform shells (M7.3).
 penguin-tray-model = { path = "crates/penguin-tray-model" }
 # Desktop client (Phase 2a): IPC wrapper + keychain + OAuth glue for the Tauri shell.
@@ -159,6 +165,13 @@ nix = { version = "0.30", features = ["user", "fs"] }
 # Low-level Unix system calls (ioctl, open, etc.) for TUN device creation in
 # the userspace WireGuard backend.
 libc = "0.2"
+# Cross-platform config/home directory resolution (XDG on Linux, Known
+# Folders on Windows, Standard Directories on macOS) for locating the
+# per-ecosystem hook config files penguin-module-waddleai installs into
+# (`~/.claude/settings.json`, `~/.gemini/config/hooks.json`, VS Code's user
+# settings). Already used by `desktop/src-tauri` (excluded from this
+# workspace) for the same purpose.
+dirs = "6.0.0"
 
 # OS keychain backends (Windows Credential Manager, macOS Keychain, Linux
 # Secret Service). Unlike Go's 99designs/keyring this crate has NO encrypted
@@ -196,6 +209,12 @@ service-manager = "0.7"
 # Self-update: swap the running binary in place after minisign verification.
 # minisign-verify + reqwest are already in the graph (extplugin / license).
 self-replace = "1"
+# Selects the newest release by semver among GitHub's `/releases` list
+# (never `/releases/latest` — see `penguin-update::release`'s doc comment for
+# why). Already resolves to the version already in the lock via
+# `rustc_version`'s transitive dependency, so this adds no new crate version
+# to the graph, only a direct name for one already being built.
+semver = "1"
 # Release assets are tar.gz (Linux/macOS) or zip (Windows) per goreleaser's
 # name_template; the updater extracts the binary from whichever the target OS
 # ships. Go only implemented tar+gzip, silently breaking Windows updates.

@@ -82,7 +82,7 @@ COVER_IGNORE_UNIT := $(COVER_EXCLUDE_ALWAYS)|$(COVER_EXCLUDE_BOUNDARY)
 COVER_IGNORE_INT := $(COVER_EXCLUDE_ALWAYS)
 
 .PHONY: help build test test-unit test-integration test-integration-cover \
-        lint format test-security smoke-test clean proto go-client-check \
+        lint format test-security smoke-test clean proto \
         pre-commit parity docker-image docker-volumes tools
 
 help: ## Show available targets
@@ -135,9 +135,6 @@ smoke-test: build ## Build, then check each binary answers --version
 proto: ## Regenerate protobuf bindings (build.rs does this; forces a rebuild)
 	$(CARGO) clean -p penguin-proto
 	$(CARGO) build -p penguin-proto --locked
-
-go-client-check: ## Build + test the frozen Go reference client
-	$(MAKE) -C go-client build test
 
 # The M8 parity harness. run.sh builds the Rust binaries + the raw wire probe
 # itself and runs every gating gate (dims 1,2,3,5,6 + the metrics test); the

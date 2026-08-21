@@ -1,6 +1,6 @@
 # PR gate for the Rust workspace: format, clippy (warnings = errors), build,
-# tests, and supply-chain (cargo-deny + cargo-audit). The frozen Go client has
-# its own workflow (go-client-frozen.yml). Actions pinned to commit SHAs.
+# tests, and supply-chain (cargo-deny + cargo-audit). Actions pinned to commit
+# SHAs.
 name: CI
 
 on:

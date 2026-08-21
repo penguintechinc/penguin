@@ -475,6 +475,28 @@ fn confirm_from_stdin() -> bool {
     penguin_cli_core::update::confirm_answer(&answer)
 }
 
+/// Reads all of stdin to EOF, but only when it is piped or redirected
+/// rather than an interactive terminal (`std::io::IsTerminal`, stable since
+/// Rust 1.70 — no new dependency) — this must never block a real terminal
+/// session waiting on a human who was never going to type anything. Empty
+/// input (a `/dev/null` redirect, `cat empty-file |`) is treated the same
+/// as "nothing piped". See `penguin_cli_core::dispatch::apply_stdin_fallback`
+/// for how the result feeds into a dispatched command's positional
+/// arguments.
+fn read_piped_stdin() -> Option<String> {
+    use std::io::IsTerminal as _;
+    use std::io::Read as _;
+
+    if std::io::stdin().is_terminal() {
+        return None;
+    }
+    let mut buffer = String::new();
+    match std::io::stdin().read_to_string(&mut buffer) {
+        Ok(_) if !buffer.is_empty() => Some(buffer),
+        _ => None,
+    }
+}
+
 /// A dynamic module command: `penguin <module> <command...> [args]`.
 async fn cmd_dispatch(
     client: Option<DaemonClient<Channel>>,
@@ -489,12 +511,24 @@ async fn cmd_dispatch(
         .map(|module| module.commands.as_slice())
         .unwrap_or_default();
 
-    let Some(request) =
+    let Some(mut request) =
         penguin_cli_core::dispatch::resolve_dispatch(module_name, module_commands, matches)
     else {
         eprintln!("penguin: no command given for module {module_name:?}");
         return ExitCode::FAILURE;
     };
+
+    // A leaf command whose `CommandSpec` takes no literal positional
+    // (`max_args: 0` — clap already rejected any stray shell token, see
+    // `penguin_cli_core::tree::args_positional`) still gets a chance at a
+    // value here, but only from a genuine pipe/redirect, never by blocking
+    // on an interactive terminal — see `read_piped_stdin`'s doc. This is
+    // how a secret (`key set`) or a sensitive payload (`hook <event>`)
+    // reaches a command without ever transiting as a literal CLI argument.
+    if request.args.is_empty() {
+        request.args =
+            penguin_cli_core::dispatch::apply_stdin_fallback(request.args, read_piped_stdin());
+    }
 
     let Some(mut client) = client else {
         print_daemon_unreachable(socket_path);
