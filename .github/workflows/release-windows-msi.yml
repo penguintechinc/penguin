@@ -1,6 +1,6 @@
 # Release: Windows MSI (Rust build)
 #
-# On a version tag, build penguind.exe + penguin.exe natively for
+# On a version tag, build penguind.exe + pdcli.exe natively for
 # windows/amd64, package them into an MSI with WiX v5, and upload it to the
 # GitHub Release. Runs on windows-latest because WiX's MSI Bind backend
 # P/Invokes the Windows-only msi.dll and therefore cannot emit an .msi on
@@ -56,15 +56,15 @@ jobs:
           unzip -q protoc.zip -d "$RUNNER_TEMP/protoc"
           echo "$RUNNER_TEMP/protoc/bin" >> "$GITHUB_PATH"
 
-      - name: Build penguind + penguin (x86_64-pc-windows-msvc)
+      - name: Build penguind + pdcli (x86_64-pc-windows-msvc)
         shell: bash
-        run: cargo build --release --locked --target x86_64-pc-windows-msvc -p penguind -p penguin
+        run: cargo build --release --locked --target x86_64-pc-windows-msvc -p penguind -p pdcli
 
       - name: Stage binaries for WiX
         shell: bash
         run: |
           mkdir -p staging
-          cp target/x86_64-pc-windows-msvc/release/penguind.exe target/x86_64-pc-windows-msvc/release/penguin.exe staging/
+          cp target/x86_64-pc-windows-msvc/release/penguind.exe target/x86_64-pc-windows-msvc/release/pdcli.exe staging/
 
       - name: Derive version from tag
         id: ver

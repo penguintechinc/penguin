@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# M4 CLI golden-diff gate: the FROZEN Go `penguin` CLI and the Rust `penguin`
+# M4 CLI golden-diff gate: the FROZEN Go `penguin` CLI and the Rust `pdcli`
 # CLI both drive the SAME running Rust `penguind`. For each command this
 # diffs stdout, stderr, and exit code between the two CLIs, then does it
 # again after killing the daemon (the "is it down" message matters as much
@@ -30,7 +30,7 @@ set -uo pipefail
 # script.
 
 PENGUIND="${PENGUIND:-target/debug/penguind}"
-PENGUIN_RS="${PENGUIN_RS:-target/debug/penguin}"
+PENGUIN_RS="${PENGUIN_RS:-target/debug/pdcli}"
 PENGUIN_GO="${PENGUIN_GO:-go-client/bin/penguin}"
 
 fail_setup() {

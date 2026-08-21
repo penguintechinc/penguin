@@ -76,38 +76,38 @@ mod tests {
 
     #[test]
     fn module_name_reads_the_positional_when_present() {
-        let matches = matches_for(&["penguin", "load", "squawk"]);
+        let matches = matches_for(&["pdcli", "load", "squawk"]);
         let (_, sub) = matches.subcommand().expect("load matched");
         assert_eq!(module_name(sub), Some("squawk"));
     }
 
     #[test]
     fn module_name_is_none_when_omitted() {
-        let matches = matches_for(&["penguin", "status"]);
+        let matches = matches_for(&["pdcli", "status"]);
         let (_, sub) = matches.subcommand().expect("status matched");
         assert_eq!(module_name(sub), None);
     }
 
     #[test]
     fn json_requested_reflects_the_global_flag() {
-        let matches = matches_for(&["penguin", "--json", "modules"]);
+        let matches = matches_for(&["pdcli", "--json", "modules"]);
         assert!(json_requested(&matches));
 
-        let matches = matches_for(&["penguin", "modules"]);
+        let matches = matches_for(&["pdcli", "modules"]);
         assert!(!json_requested(&matches));
     }
 
     #[test]
     fn json_flag_after_the_subcommand_also_works() {
         // The deliberate divergence from Go's stricter placement rule.
-        let matches = matches_for(&["penguin", "modules", "--json"]);
+        let matches = matches_for(&["pdcli", "modules", "--json"]);
         let (_, sub) = matches.subcommand().expect("modules matched");
         assert!(json_requested(sub));
     }
 
     #[test]
     fn logs_options_reads_module_follow_and_lines() {
-        let matches = matches_for(&["penguin", "logs", "squawk", "--follow", "--lines", "50"]);
+        let matches = matches_for(&["pdcli", "logs", "squawk", "--follow", "--lines", "50"]);
         let (_, sub) = matches.subcommand().expect("logs matched");
         let options = logs_options(sub);
         assert_eq!(
@@ -122,7 +122,7 @@ mod tests {
 
     #[test]
     fn logs_options_defaults_match_go() {
-        let matches = matches_for(&["penguin", "logs"]);
+        let matches = matches_for(&["pdcli", "logs"]);
         let (_, sub) = matches.subcommand().expect("logs matched");
         let options = logs_options(sub);
         assert_eq!(
@@ -137,11 +137,11 @@ mod tests {
 
     #[test]
     fn update_yes_reflects_the_flag() {
-        let matches = matches_for(&["penguin", "update", "--yes"]);
+        let matches = matches_for(&["pdcli", "update", "--yes"]);
         let (_, sub) = matches.subcommand().expect("update matched");
         assert!(update_yes(sub));
 
-        let matches = matches_for(&["penguin", "update"]);
+        let matches = matches_for(&["pdcli", "update"]);
         let (_, sub) = matches.subcommand().expect("update matched");
         assert!(!update_yes(sub));
     }

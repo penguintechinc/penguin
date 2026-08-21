@@ -38,7 +38,7 @@ this naming, so nothing else will catch a mismatch.**
 
 | Workflow | Produces | Runs on |
 |---|---|---|
-| `release.yml` | `penguind` + `penguin` archives (6 targets), deb/rpm packages, SBOMs, minisign + cosign signatures | tag push `v*` |
+| `release.yml` | `penguind` + `pdcli` archives (6 targets), deb/rpm packages, SBOMs, minisign + cosign signatures | tag push `v*` |
 | `release-tray.yml` | `penguin-tray` raw executables (5 targets — no windows/arm64), minisign-signed | tag push `v*` |
 | `release-windows-msi.yml` | `penguind.msi` (WiX v5, windows/amd64 only) | tag push `v*` |
 
@@ -74,7 +74,7 @@ actual `gh release upload`). Signing is centralized in `finalize` on a single
    foresight — worth a periodic re-check as GitHub continues retiring older
    macOS images.
 
-3. **`windows/arm64` for `penguind`/`penguin` is cross-linked, not skipped.**
+3. **`windows/arm64` for `penguind`/`pdcli` is cross-linked, not skipped.**
    Unlike Go's tray build (which never shipped `windows/arm64` — "no stable
    native hosted runner yet"), `release.yml` builds `windows/arm64` by
    cross-linking from `windows-latest` (an amd64 host) using
@@ -140,11 +140,11 @@ none of the following has been run, only reasoned through:
 - **Cross-platform compilation of this workspace at all.** `ci.yml` only
   ever builds/tests on Linux (`rust:1.97-bookworm` container). This pipeline
   is the first thing that would attempt macOS and Windows builds of
-  `penguind`/`penguin`/`penguin-tray` — `rustls` + `aws-lc-rs`,
+  `penguind`/`pdcli`/`penguin-tray` — `rustls` + `aws-lc-rs`,
   `windows-service`, `keyring`'s per-OS backends, and
   `defguard_wireguard_rs`/`boringtun` all have OS-specific code paths that
   have never been compiled, let alone run, on those OSes.
-- **The `windows/arm64` cross-link for `penguind`/`penguin`** (deviation #3
+- **The `windows/arm64` cross-link for `penguind`/`pdcli`** (deviation #3
   above) — the ARM64 MSVC toolset's presence on the runner image was
   confirmed from GitHub's own documentation, not by actually invoking it.
 - **`nfpm` env-var expansion for `arch`/`version`/`maintainer`/etc.** —

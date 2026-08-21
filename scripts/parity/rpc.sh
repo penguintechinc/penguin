@@ -22,7 +22,7 @@
 #                     wire, and that rejection precedes the update path.
 #
 # The ListCommands/Dispatch/WatchEvents/api_version checks use the raw wire
-# probe (bins/penguin/examples/parity_probe.rs) because the frozen CLIs only
+# probe (bins/pdcli/examples/parity_probe.rs) because the frozen CLIs only
 # speak api_version="v1" and only reach ApplyUpdate through the gated update
 # flow. Everything here is unprivileged (squawk with the forwarder off) and
 # runs in plain CI.

@@ -11,7 +11,7 @@
 # nfpm behavior — see www/content/docs/configuration.md in goreleaser/nfpm); the
 # `contents.src` binary paths deliberately do NOT rely on that expansion (nfpm
 # does not document env expansion for content paths), so the release workflow
-# re-stages dist/stage/{penguind,penguin} with the correct arch's binaries
+# re-stages dist/stage/{penguind,pdcli} with the correct arch's binaries
 # before each of the two nfpm invocations, and this file always points at the
 # same fixed dist/stage/ path.
 name: penguin
@@ -22,7 +22,7 @@ section: net
 priority: optional
 maintainer: "PenguinTech <support@penguintech.io>"
 description: |
-  PenguinTech unified endpoint agent — daemon (penguind) and CLI (penguin).
+  PenguinTech unified endpoint agent — daemon (penguind) and CLI (pdcli).
 vendor: PenguinTech
 homepage: https://www.penguintech.io
 # Matches go-client/.goreleaser.yaml's nfpms.license exactly. The workspace's
@@ -37,8 +37,8 @@ contents:
     dst: /usr/bin/penguind
     file_info:
       mode: 0755
-  - src: dist/stage/penguin
-    dst: /usr/bin/penguin
+  - src: dist/stage/pdcli
+    dst: /usr/bin/pdcli
     file_info:
       mode: 0755
   # M7.1's hardened unit — owned by that milestone, referenced (not copied)

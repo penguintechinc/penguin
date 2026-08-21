@@ -36,7 +36,7 @@ pub const ARGS_ID: &str = "args";
 /// module subtrees — see [`graft_modules`] for adding those once the daemon
 /// has answered `ListCommands`.
 pub fn build_static_root() -> Command {
-    Command::new("penguin")
+    Command::new("pdcli")
         .about("PenguinTech unified endpoint agent")
         .long_about("Manage the penguin daemon and its modules")
         .arg(socket_arg())
@@ -277,7 +277,7 @@ mod tests {
     fn empty_module_list_still_yields_a_working_static_tree() {
         let root = graft_modules(build_static_root(), &[]);
         let matches = root
-            .try_get_matches_from(["penguin", "version"])
+            .try_get_matches_from(["pdcli", "version"])
             .expect("static verb still parses with no modules loaded");
         assert_eq!(matches.subcommand_name(), Some("version"));
     }

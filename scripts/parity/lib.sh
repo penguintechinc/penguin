@@ -26,7 +26,7 @@ PG_TARGET_DIR="${CARGO_TARGET_DIR:-$PG_ROOT/target}"
 
 # Binaries under test — overridable so CI can point at release builds.
 PENGUIND="${PENGUIND:-$PG_TARGET_DIR/debug/penguind}"
-PENGUIN_RS="${PENGUIN_RS:-$PG_TARGET_DIR/debug/penguin}"
+PENGUIN_RS="${PENGUIN_RS:-$PG_TARGET_DIR/debug/pdcli}"
 PROBE="${PROBE:-$PG_TARGET_DIR/debug/examples/parity_probe}"
 PENGUIN_GO="${PENGUIN_GO:-$PG_ROOT/go-client/bin/penguin}"
 PENGUIND_GO="${PENGUIND_GO:-$PG_ROOT/go-client/bin/penguind}"
