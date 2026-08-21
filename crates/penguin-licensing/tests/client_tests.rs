@@ -283,6 +283,39 @@ fn no_domain_based_bypass_exists() {
 
 /// `refresh` starts and stops cleanly, and the background loop actually
 /// calls the server more than once before being stopped.
+///
+/// This polls for the "at least 2 calls" condition instead of sleeping a
+/// fixed real duration and then asserting once: the old version slept a
+/// fixed 120ms and asserted on however many of the interval's real 20ms
+/// ticks happened to land in that window — a margin a loaded/slow CI runner
+/// can blow through (that's exactly what CI hit: only 1 completed refresh in
+/// 120ms instead of the expected 6+).
+///
+/// `tokio::time::pause`'s auto-advancing virtual clock
+/// (`#[tokio::test(start_paused = true)]`) is the deterministic fix of
+/// choice per house style, but it does not work for this loop: it was tried
+/// first and reproducibly stopped after exactly 1 call. The reason is
+/// structural, not a test bug — `spawn_background_refresh` awaits the first
+/// `refresh()`'s real, variable-latency network I/O *before* creating the
+/// `interval`, so that interval's periodic-tick timer is only registered in
+/// tokio's timer wheel after that I/O completes. Meanwhile this test's own
+/// wait registers its timer up front. Tokio's paused-clock auto-advance
+/// jumps straight to the nearest timer *currently in the wheel* whenever the
+/// runtime goes idle — with only the outer wait's (later, already-registered)
+/// deadline present, it fast-forwards straight past where the interval's
+/// tick would have landed, skipping every tick but the one immediate
+/// call already made. Restructuring `spawn_background_refresh` to register
+/// the interval before the first fetch wouldn't help either: `Interval`
+/// arms each tick's wheel entry lazily on `.tick()`, not all up front, so
+/// the second tick's entry still cannot exist until the first `.tick()`
+/// (consumed synchronously right after the immediate refresh, per the
+/// existing comment below) has been awaited.
+///
+/// So this test instead polls real elapsed time, bounded by a 5s ceiling —
+/// far beyond any plausible CI scheduling delay for 2 loopback round trips
+/// 20ms apart — rather than a single fixed-sleep-then-assert margin. It
+/// still resolves in low tens of milliseconds under normal conditions and
+/// only pays the full 5s if the loop has genuinely stopped ticking.
 #[tokio::test]
 async fn background_refresh_starts_and_stops_and_ticks_more_than_once() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -299,13 +332,16 @@ async fn background_refresh_starts_and_stops_and_ticks_more_than_once() {
     )));
     let handle = client.spawn_background_refresh(std::time::Duration::from_millis(20));
 
-    tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+    let poll_deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while server.call_count() < 2 && std::time::Instant::now() < poll_deadline {
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
     handle.stop().await;
 
     assert_eq!(client.tier(), "professional");
     assert!(
         server.call_count() >= 2,
-        "expected at least 2 background refreshes, got {}",
+        "expected at least 2 background refreshes within 5s, got {}",
         server.call_count()
     );
 }
