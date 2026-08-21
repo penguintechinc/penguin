@@ -56,6 +56,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # why the README's docker run example passes --user $(id -u):$(id -g).
 RUN groupadd -r builder && useradd -r -m -g builder -d /home/builder -s /bin/bash builder \
     && chown -R builder:builder /app
+# DL3066 flags non-numeric USER as unresolvable on the host, but this image
+# creates `builder` via useradd immediately above, so /etc/passwd resolves it
+# inside the container; a numeric UID would only trade away the readability of
+# a named user for no portability gain here.
+# hadolint ignore=DL3066
 USER builder
 
 # Verify Rust/cargo installation
