@@ -32,7 +32,7 @@ work being built now.
 ```
 ENDPOINT (end-user machine)
   ├─ penguin agent (penguind): modules
-  │     waddleai · waddles · tobogganing · squawk · skauswatch · otel
+  │     waddleai · waddles · tobogganing · squawk · skauswatch   (all hook into the embedded OTel client)
   │     + SELF-PROTECTION (watchdog + integrity + authorized teardown)
   └─ fleetd (FleetDM client)  ──► MDM / osquery policies + inventory   [we install alongside]
 
@@ -63,7 +63,7 @@ flows:  agent →OTLP→ SigNoz   ·   agent ↔ console (enroll / checkin / con
 
 Split into independently-mergeable branches off `release/v0.2.X`:
 `fix/workspace-compile` (only if §11 is red), `feature/agent-self-protection`,
-`feature/skauswatch-module`, `feature/otel-signoz-module`, plus fleetd
+`feature/skauswatch-module`, `feature/embedded-otel-client`, plus fleetd
 coexistence docs/detect folded into self-protection or its own `docs/` branch.
 
 ### 4.1 Self-protection subsystem  →  new crate `penguin-selfprotect`
@@ -131,18 +131,31 @@ SkausWatch = S3 malware + threat-intel + vuln-scanning platform with a Go endpoi
 - Register `"skauswatch"` in `penguin-registry`; `license_feature` empty (loads core; product
   entitlement enforced server-side, matching the other four). Registry identity test added.
 
-### 4.3 OpenTelemetry → SigNoz core module
+### 4.3 Embedded OpenTelemetry client (SDK hook for all modules)
 
-- `crates/penguin-module-otel` — **core, unlicensed** built-in module (registered `"otel"`).
-  Exports metrics/logs/traces over **OTLP** (`opentelemetry` + `opentelemetry-otlp`, exact pins TBD
-  in build, minimize lock churn) to a configured **SigNoz** collector endpoint. Endpoint from local
-  config **and** console override (SP2). Serves as the sink so `penguin-telemetry` events + tamper
-  events reach SigNoz. Resource attributes carry `node_id`, agent version, and detected FleetDM
-  presence (§4.4).
-- (Rejected: exporter baked only into `penguin-telemetry` — a module is independently
-  supervisable/configurable, matching the "OpenTelemetry agent as a core module" framing.)
-- Tests: OTLP exporter builds against a mock collector; telemetry+tamper events flow through;
-  config precedence (console > local) resolves correctly.
+The OTel agent is **embedded telemetry infrastructure**, not a peer supervised module — so product
+modules can *depend on it and hook in*, which a sibling module could not provide.
+
+- `crates/penguin-otel` — the OTLP pipeline: tracer + meter + logger providers exporting over
+  **OTLP** (`opentelemetry` + `opentelemetry-otlp` + `opentelemetry_sdk`, exact pins chosen at build
+  to minimize lock churn) to a configured **SigNoz** endpoint. Built once at daemon startup and held
+  in the daemon's telemetry layer. Resource attributes: `node_id`, agent version, tenant, detected
+  FleetDM presence (§4.4).
+- **The module hook** — extend `penguin-sdk::HostServices` (which every module already receives at
+  `init`) so a module gets a per-module, pre-scoped telemetry handle in **one call**:
+  `host.telemetry("skauswatch")` → `{ meter, tracer, logger }` already tagged with the module name.
+  This subsumes today's `Metrics`/`module_registerer` path (kept as a thin compatibility shim over
+  the meter). A module emits a metric / span / log without ever touching OTLP or the SigNoz endpoint.
+- **Central sink** — daemon-internal telemetry (supervisor restarts, module health) and **tamper
+  events** (§4.1.a) flow through the same client, so everything lands in SigNoz.
+- **Config** — SigNoz endpoint, sampling, and enable/disable from daemon config **and** console
+  override (SP2, console > local). Exporter unreachable → buffer within OTLP limits, drop-oldest,
+  never block a module's hot path, never crash. `pdcli otel status` reports exporter health.
+- Wrapped in PostHog flag `penguin.otel` (default OFF; when off, the hook returns a **no-op handle**
+  so modules still call it safely).
+- Tests: hook returns a working scoped handle; a module metric/span/log reaches a mock OTLP
+  collector; tamper + daemon telemetry flow through; config precedence (console > local); no-op
+  handle when the flag is off; exporter-down neither blocks nor panics.
 
 ### 4.4 FleetDM coexistence (recommend + detect, do NOT rebuild)
 
@@ -180,7 +193,7 @@ penguincloud** as the hosted product module. Both consume the SP2 protocol. Open
 
 ## 8. Standards & rollout
 
-- **Feature flags:** `penguin.self-protection`, `penguin.module.skauswatch`, `penguin.module.otel`
+- **Feature flags:** `penguin.self-protection`, `penguin.module.skauswatch`, `penguin.otel`
   — PostHog, default OFF, cached offline.
 - **Coverage:** ≥90% on new crates. `make test` / `make docker-test`.
 - **Deps:** exact pins, `Cargo.lock` committed, `cargo deny`; keep lock diff minimal (add only
