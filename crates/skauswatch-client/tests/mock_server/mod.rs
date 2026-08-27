@@ -26,6 +26,7 @@ use tokio::task::JoinHandle;
 /// written.
 #[derive(Debug, Clone, Default)]
 struct RecordedRequest {
+    method: String,
     path: String,
     /// Header names lowercased, values as sent.
     headers: HashMap<String, String>,
@@ -92,6 +93,17 @@ impl MockServer {
             .clone()
     }
 
+    /// The request-line HTTP method (e.g. `"GET"`, `"POST"`) of the most
+    /// recently received request. `None` if no request has been received
+    /// yet.
+    pub fn last_method(&self) -> Option<String> {
+        self.last_request
+            .lock()
+            .expect("mock server state mutex poisoned")
+            .as_ref()
+            .map(|r| r.method.clone())
+    }
+
     /// Whether the most recently received request's raw body contains
     /// `needle`. Panics if no request has been received yet.
     pub fn last_body_contains(&self, needle: &str) -> bool {
@@ -145,6 +157,16 @@ impl Drop for MockServer {
 pub async fn start_register_ok(agent_id: &str, api_key: &str) -> MockServer {
     let body = serde_json::json!({ "agent_id": agent_id, "api_key": api_key }).to_string();
     MockServer::start(200, body).await
+}
+
+/// Starts a server that answers every request with a fixed non-2xx
+/// `status`, regardless of headers or body sent — exercises the
+/// `send_signed`/`register` non-2xx error branch
+/// ([`skauswatch_client::ClientError::Http`]), as opposed to
+/// [`start_auth_echo`], which only returns non-2xx when auth headers are
+/// missing/malformed.
+pub async fn start_error(status: u16) -> MockServer {
+    MockServer::start(status, "{}".to_string()).await
 }
 
 /// Starts a server that answers 200 with a canned config body
@@ -244,12 +266,9 @@ async fn serve_one<F>(
     if bytes_read == 0 {
         return;
     }
-    let path = request_line
-        .trim_end()
-        .split(' ')
-        .nth(1)
-        .unwrap_or("")
-        .to_string();
+    let mut request_line_parts = request_line.trim_end().split(' ');
+    let method = request_line_parts.next().unwrap_or("").to_string();
+    let path = request_line_parts.next().unwrap_or("").to_string();
 
     let mut headers = HashMap::new();
     let mut content_length = 0usize;
@@ -279,6 +298,7 @@ async fn serve_one<F>(
     }
 
     let recorded = RecordedRequest {
+        method,
         path,
         headers,
         body,
