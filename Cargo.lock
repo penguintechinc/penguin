@@ -4871,6 +4871,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "skauswatch-client"
+version = "0.2.0"
+dependencies = [
+ "hmac",
+ "reqwest",
+ "rustls",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.18",
+ "tokio",
+ "webpki-roots",
+]
+
+[[package]]
 name = "slab"
 version = "0.4.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
