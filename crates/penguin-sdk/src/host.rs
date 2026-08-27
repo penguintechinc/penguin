@@ -36,6 +36,12 @@ pub trait HostServices: Send + Sync {
     fn data_dir(&self) -> PathBuf;
     /// The sink module status-change events are published to.
     fn events(&self) -> Arc<dyn EventSink>;
+    /// A telemetry handle scoped to this module (metrics/traces/logs → OTLP/SigNoz).
+    /// Defaults to a no-op so existing implementations need no change and a disabled
+    /// exporter is always safe to call. The daemon overrides this with a real handle.
+    fn telemetry(&self) -> std::sync::Arc<dyn crate::ModuleTelemetry> {
+        std::sync::Arc::new(crate::NoopTelemetry)
+    }
 }
 
 /// Namespaced secure storage backed by the OS keychain/keystore (with an
@@ -201,6 +207,92 @@ pub struct Event {
     pub at: SystemTime,
     /// Small, non-sensitive key/value context for display.
     pub fields: HashMap<String, String>,
+}
+
+#[cfg(test)]
+mod telemetry_default_tests {
+    use super::*;
+
+    /// Implements every `HostServices` method except `telemetry()`, to prove
+    /// the trait's default body is what makes the accessor usable.
+    struct MinimalHost;
+
+    struct MinimalLogger;
+    impl Logger for MinimalLogger {
+        fn log(&self, _level: LogLevel, _message: &str, _fields: &[(&str, &str)]) {}
+    }
+
+    struct MinimalSecrets;
+    #[async_trait]
+    impl SecretStore for MinimalSecrets {
+        async fn get(&self, _key: &str) -> Result<Vec<u8>, SecretError> {
+            Err(SecretError::NotFound)
+        }
+        async fn set(&self, _key: &str, _value: &[u8]) -> Result<(), SecretError> {
+            Ok(())
+        }
+        async fn delete(&self, _key: &str) -> Result<(), SecretError> {
+            Ok(())
+        }
+    }
+
+    struct MinimalLicense;
+    impl LicenseChecker for MinimalLicense {
+        fn feature_enabled(&self, _key: &str) -> bool {
+            false
+        }
+        fn tier(&self) -> String {
+            String::new()
+        }
+    }
+
+    struct MinimalMetrics;
+    impl Metrics for MinimalMetrics {
+        fn register(
+            &self,
+            _collector: Box<dyn prometheus::core::Collector>,
+        ) -> Result<(), MetricsError> {
+            Ok(())
+        }
+    }
+
+    struct MinimalEvents;
+    impl EventSink for MinimalEvents {
+        fn publish(&self, _event: Event) {}
+    }
+
+    impl HostServices for MinimalHost {
+        fn logger(&self) -> Arc<dyn Logger> {
+            Arc::new(MinimalLogger)
+        }
+        fn secrets(&self) -> Arc<dyn SecretStore> {
+            Arc::new(MinimalSecrets)
+        }
+        fn license(&self) -> Arc<dyn LicenseChecker> {
+            Arc::new(MinimalLicense)
+        }
+        fn metrics(&self) -> Arc<dyn Metrics> {
+            Arc::new(MinimalMetrics)
+        }
+        fn config(&self) -> Vec<u8> {
+            Vec::new()
+        }
+        fn data_dir(&self) -> PathBuf {
+            PathBuf::new()
+        }
+        fn events(&self) -> Arc<dyn EventSink> {
+            Arc::new(MinimalEvents)
+        }
+        // telemetry() intentionally NOT overridden — proves the default exists.
+    }
+
+    #[test]
+    fn telemetry_defaults_to_noop_for_impls_that_do_not_override() {
+        let host = MinimalHost;
+        // Compiles only if `telemetry()` has a default body; the returned
+        // handle must be safely callable without panicking.
+        host.telemetry().counter_add("x", 1, &[]);
+    }
 }
 
 #[cfg(test)]
