@@ -3509,6 +3509,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "penguin-module-skauswatch"
+version = "0.2.0"
+dependencies = [
+ "async-trait",
+ "jsonschema",
+ "penguin-sdk",
+ "prometheus",
+ "serde",
+ "serde_json",
+ "serde_norway",
+ "skauswatch-client",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+]
+
+[[package]]
 name = "penguin-module-squawk"
 version = "0.2.0"
 dependencies = [

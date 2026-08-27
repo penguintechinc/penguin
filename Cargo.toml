@@ -54,6 +54,8 @@ penguin-module-tobogganing = { path = "crates/penguin-module-tobogganing" }
 # reports telemetry. Policy decisions stay server-side; see the crate's own
 # top-level doc.
 penguin-module-waddleai = { path = "crates/penguin-module-waddleai" }
+# SkausWatch: monitoring and alerting endpoint client.
+penguin-module-skauswatch = { path = "crates/penguin-module-skauswatch" }
 # The pure tray menu model, consumed by the penguin-tray platform shells (M7.3).
 penguin-tray-model = { path = "crates/penguin-tray-model" }
 # Desktop client (Phase 2a): IPC wrapper + keychain + OAuth glue for the Tauri shell.
