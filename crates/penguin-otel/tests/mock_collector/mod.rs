@@ -100,24 +100,40 @@ impl MockCollector {
     /// thread/task, so the request may not have landed the instant this is
     /// called even after `OtelPipeline::shutdown()` forces a flush.
     pub async fn wait_for_metric(&self, metric_name: &str) -> CapturedRequest {
+        self.wait_for("/v1/metrics", metric_name).await
+    }
+
+    /// Same as [`Self::wait_for_metric`], for `/v1/traces` — polls until a
+    /// captured span export's body contains `span_name`.
+    pub async fn wait_for_trace(&self, span_name: &str) -> CapturedRequest {
+        self.wait_for("/v1/traces", span_name).await
+    }
+
+    /// Same as [`Self::wait_for_metric`], for `/v1/logs` — polls until a
+    /// captured log export's body contains `message`.
+    pub async fn wait_for_log(&self, message: &str) -> CapturedRequest {
+        self.wait_for("/v1/logs", message).await
+    }
+
+    async fn wait_for(&self, path: &str, needle: &str) -> CapturedRequest {
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
-            if let Some(found) = self.find_metric(metric_name) {
+            if let Some(found) = self.find(path, needle) {
                 return found;
             }
             if Instant::now() >= deadline {
-                panic!("timed out waiting for a /v1/metrics request containing {metric_name:?}");
+                panic!("timed out waiting for a {path} request containing {needle:?}");
             }
             sleep(Duration::from_millis(20)).await;
         }
     }
 
-    fn find_metric(&self, metric_name: &str) -> Option<CapturedRequest> {
+    fn find(&self, path: &str, needle: &str) -> Option<CapturedRequest> {
         let guard = self.requests.lock().expect("requests mutex poisoned");
         guard
             .iter()
             .rev()
-            .find(|r| r.path == "/v1/metrics" && contains_bytes(&r.body, metric_name))
+            .find(|r| r.path == path && contains_bytes(&r.body, needle))
             .cloned()
     }
 }

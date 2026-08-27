@@ -43,6 +43,24 @@ impl OtelPipeline {
     /// once running, per-export failures are logged and swallowed — see
     /// `telemetry.rs`/the OTLP exporters' own retry/log-and-continue
     /// behavior — never a panic and never a blocked caller.
+    ///
+    /// # Note: requires a multi-thread Tokio runtime
+    ///
+    /// The returned pipeline's metric/span/log export (`scoped(...)`'s
+    /// handles, and `shutdown()`) MUST run on a multi-thread Tokio runtime
+    /// (`#[tokio::main]`'s default, or `Builder::new_multi_thread()`) — the
+    /// same requirement applies to whichever thread called `build`, since
+    /// that's ordinarily the same runtime. Under a `current_thread` runtime
+    /// (`#[tokio::test]`'s default, or `Builder::new_current_thread()`),
+    /// the OTLP/HTTP exporter's blocking reqwest client reliably hangs for
+    /// its full ~10s (`force_flush`) / ~5s (`shutdown`) internal timeouts
+    /// and then fails — reproduced against the bare `opentelemetry_sdk` +
+    /// `opentelemetry-otlp` crates outside this module, so it is not
+    /// specific to this crate's glue code. `penguind` (this pipeline's only
+    /// caller today) already runs multi-thread
+    /// (`bins/penguind/src/daemon_main.rs`), so this is a non-issue there —
+    /// but `penguin-otel` is a reusable library, so any future caller must
+    /// do the same.
     pub fn build(
         cfg: &OtelConfig,
         resource_attrs: &[(&str, &str)],
@@ -153,4 +171,32 @@ fn build_resource(attrs: &[(&str, &str)]) -> Resource {
         .map(|(k, v)| KeyValue::new((*k).to_string(), (*v).to_string()))
         .collect();
     Resource::builder().with_attributes(kvs).build()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use penguin_sdk::LogLevel;
+
+    /// `enabled: false` must build a pure no-op pipeline: no exporter is
+    /// constructed (the endpoint below is never dialed — a bogus port would
+    /// fail loudly if this test were somehow reaching the network), `scoped`
+    /// hands back a handle whose methods are safe to call unconditionally,
+    /// and `shutdown` returns immediately with nothing to flush.
+    #[test]
+    fn disabled_config_builds_a_pure_noop_pipeline() {
+        let cfg = OtelConfig {
+            endpoint: "http://127.0.0.1:1".to_string(),
+            sampling_ratio: 1.0,
+            enabled: false,
+        };
+        let pipe = OtelPipeline::build(&cfg, &[("node_id", "n-1")]).expect("build");
+
+        let t = pipe.scoped("skauswatch");
+        t.counter_add("events_total", 5, &[("kind", "scan")]);
+        t.record_span("heartbeat", &[]);
+        t.emit_log(LogLevel::Info, "hello", &[]);
+
+        pipe.shutdown();
+    }
 }
