@@ -182,16 +182,46 @@ mod tests {
     #[tokio::test]
     async fn enroll_dispatch_recovers_from_poisoned_mutex() {
         // This test verifies that cmd_enroll doesn't panic on a poisoned mutex.
-        // We can't easily poison a mutex in a test, but we can at least verify
-        // the dispatch path runs without panicking with a normal mutex.
+        // Poison the identity mutex by spawning a thread that panics while
+        // holding its guard.
         use crate::module::SkausWatchModule;
         use crate::testutil;
 
         let module = SkausWatchModule::new();
         module.init(testutil::fake_host_default()).await.unwrap();
 
-        let result = cmd_enroll(&module).await;
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap().exit_code, 0);
+        // Set a panic hook to suppress the unwind message from the poisoning
+        // thread, keeping test output clean.
+        let default_hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {
+            // Silently consume the panic message
+        }));
+
+        // Poison the identity mutex: a thread panics while holding its guard.
+        let inner = module.inner.clone();
+        let handle = std::thread::spawn(move || {
+            let _guard = inner.identity.lock().unwrap();
+            panic!("intentionally poison the identity mutex");
+        });
+        assert!(
+            handle.join().is_err(),
+            "the spawned thread should have panicked"
+        );
+        assert!(
+            module.inner.identity.lock().is_err(),
+            "mutex is now poisoned"
+        );
+
+        // Restore the default panic hook.
+        std::panic::set_hook(default_hook);
+
+        // dispatch(enroll) must recover from the poison and NOT panic.
+        let out = module
+            .dispatch(&["enroll".to_string()], &HashMap::new(), &[])
+            .await;
+        assert!(
+            out.is_ok(),
+            "enroll dispatch must recover from a poisoned mutex, got {out:?}"
+        );
     }
 }
