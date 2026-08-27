@@ -29,6 +29,7 @@ use penguin_ipc::groups_unix::SystemGroups;
 use penguin_ipc::listen_unix::{self, ListenerConfig, PeerAuthInterceptor};
 use penguin_ipc::{GroupResolver, IpcError};
 use penguin_licensing::{LicenseClient, LicenseClientOptions};
+use penguin_otel::{OtelConfig, OtelPipeline};
 use penguin_proto::daemon::v1::daemon_server::DaemonServer;
 use penguin_proto::desktop::v1::bridge_action_proxy_server::BridgeActionProxyServer;
 use penguin_proto::desktop::v1::session_proxy_server::SessionProxyServer;
@@ -68,6 +69,15 @@ const LICENSE_REFRESH_INTERVAL: Duration = Duration::from_secs(5 * 60);
 /// The GitHub repository self-updates are fetched from — matches
 /// `go-client/.goreleaser.yaml`'s `release.github.{owner,name}`.
 const RELEASE_REPO: &str = "penguintechinc/penguin";
+
+/// The OTLP collector endpoint used when the daemon config has no `otel`
+/// section of its own. `DaemonConfig` deliberately carries no `otel` field
+/// yet (see the wiring comment in [`run_daemon`]) — the console-driven
+/// override this constant would otherwise come from is the SP2 follow-up
+/// [`OtelConfig::merge`] already has a hook for, so a hardcoded local
+/// default is the minimal correct wiring for this milestone rather than
+/// adding a config field with no writer yet.
+const DEFAULT_OTEL_ENDPOINT: &str = "http://localhost:4318";
 
 /// The minisign public key trusted to verify release archives.
 ///
@@ -234,6 +244,42 @@ async fn run_daemon() -> Result<(), DaemonBinError> {
     let license_refresh = license_client.spawn_background_refresh(LICENSE_REFRESH_INTERVAL);
     let license: Arc<dyn LicenseChecker> = license_client;
 
+    // OpenTelemetry pipeline: gated purely on the `penguin.otel` license
+    // flag via `LicenseChecker`, never an env var/CLI override (see
+    // `critical-rules.md` Feature Flags & License Tiers). Console-provided
+    // config override (SP2) is not implemented yet, so `OtelConfig::merge`
+    // always sees `None` here — a deliberate hook for that follow-up, not a
+    // missing feature in this milestone. A build failure (bad endpoint,
+    // etc.) degrades to no telemetry rather than aborting startup — modules
+    // still get a safe `NoopTelemetry` handle either way, see
+    // `penguin_daemon::host::DaemonHost::telemetry`.
+    let node_id = nix::unistd::gethostname()
+        .ok()
+        .and_then(|name| name.into_string().ok())
+        .unwrap_or_else(|| "unknown".to_string());
+    let otel_cfg = OtelConfig::merge(
+        OtelConfig {
+            endpoint: DEFAULT_OTEL_ENDPOINT.to_string(),
+            sampling_ratio: 1.0,
+            enabled: license.feature_enabled("penguin.otel"),
+        },
+        None,
+    );
+    let otel: Option<Arc<OtelPipeline>> = if otel_cfg.enabled {
+        match OtelPipeline::build(
+            &otel_cfg,
+            &[("node_id", node_id.as_str()), ("service.version", VERSION)],
+        ) {
+            Ok(pipeline) => Some(Arc::new(pipeline)),
+            Err(err) => {
+                tracing::warn!(error = %err, "failed to build otel pipeline; telemetry export disabled");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     // Per-module secret isolation is part of DaemonHostFactory's own
     // contract (see `penguin_daemon::host::SecretStoreProvider`):
     // `SecretsStoreProvider` gives every module its own
@@ -248,6 +294,7 @@ async fn run_daemon() -> Result<(), DaemonBinError> {
         license,
         events,
         args.state_dir.clone(),
+        otel.clone(),
     ));
 
     // `daemon_cfg.plugins_dir` is scanned lazily, one `<name>/` at a time,
@@ -346,6 +393,21 @@ async fn run_daemon() -> Result<(), DaemonBinError> {
     tracing::info!("shutting down");
     supervisor.shutdown().await;
     license_refresh.stop().await;
+    // Best-effort flush: succeeds only if this is the last surviving handle
+    // on the pipeline. In practice every loaded module's `DaemonHost` (and
+    // any still-unwinding health-poll/restart background task — see
+    // `Supervisor`'s own "cheap to clone... background tasks hold their own
+    // handle" doc) may still be holding a clone at this point, so losing this
+    // race is expected and never treated as an error — a real network
+    // exporter must never block process shutdown.
+    if let Some(pipeline) = otel {
+        match Arc::into_inner(pipeline) {
+            Some(pipeline) => pipeline.shutdown(),
+            None => tracing::debug!(
+                "otel pipeline has other live references at shutdown; skipping final flush"
+            ),
+        }
+    }
     let _ = std::fs::remove_file(&daemon_cfg.socket_path);
 
     serve_result.map_err(DaemonBinError::Serve)

@@ -6,7 +6,7 @@
 //! Transport is OTLP/HTTP, never `grpc-tonic` — see the dependency comment
 //! in `Cargo.toml` for why gRPC is off the table in this workspace.
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use opentelemetry::logs::LoggerProvider as _;
 use opentelemetry::metrics::MeterProvider as _;
@@ -68,6 +68,18 @@ impl OtelPipeline {
         if !cfg.enabled {
             return Ok(OtelPipeline { inner: None });
         }
+
+        // The exporters below build a `reqwest::blocking::Client`. The
+        // workspace's `reqwest` entry uses the `rustls-no-provider` feature
+        // (see root `Cargo.toml`'s comment on that dependency) so that every
+        // caller installs its own crypto provider explicitly rather than
+        // reqwest silently defaulting to `ring` alongside the workspace's
+        // pinned aws-lc-rs. Without this call, `Client::builder().build()`
+        // panics on the exporter's internal thread the first time any
+        // process constructs an *enabled* pipeline before some other crate's
+        // own installer (`penguin-licensing`, `penguin-module-tobogganing`,
+        // etc.) happens to have run first.
+        ensure_crypto_provider_installed();
 
         let resource = build_resource(resource_attrs);
         let base = cfg.endpoint.trim_end_matches('/');
@@ -163,6 +175,20 @@ impl OtelPipeline {
             tracing::warn!(error = %e, "otel: logger provider shutdown failed");
         }
     }
+}
+
+/// Installs the aws-lc-rs crypto provider as the process default, exactly
+/// once. Idempotent: losing the install race to another initializer
+/// elsewhere in the daemon (e.g. the license client's own installer) is not
+/// an error, since the whole workspace is pinned to aws-lc-rs — see
+/// `penguin_licensing::client`'s identically-named/shaped helper, which this
+/// mirrors rather than shares (a shared helper would need a new leaf crate
+/// just for one `OnceLock`, which is not worth it here).
+fn ensure_crypto_provider_installed() {
+    static INSTALLED: OnceLock<()> = OnceLock::new();
+    INSTALLED.get_or_init(|| {
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    });
 }
 
 fn build_resource(attrs: &[(&str, &str)]) -> Resource {

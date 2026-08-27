@@ -37,6 +37,7 @@ pub trait HostFactory: Send + Sync {
 /// (see [`DaemonHostFactory::host_for`]) — mirrors the Go `HostImpl`, which is
 /// likewise a bag of pre-resolved fields rather than doing work per call.
 pub struct DaemonHost {
+    module: String,
     logger: Arc<dyn Logger>,
     secrets: Arc<dyn SecretStore>,
     license: Arc<dyn LicenseChecker>,
@@ -44,6 +45,7 @@ pub struct DaemonHost {
     data_dir: PathBuf,
     events: Arc<dyn EventSink>,
     config: Vec<u8>,
+    otel: Option<Arc<penguin_otel::OtelPipeline>>,
 }
 
 impl HostServices for DaemonHost {
@@ -73,6 +75,20 @@ impl HostServices for DaemonHost {
 
     fn events(&self) -> Arc<dyn EventSink> {
         self.events.clone()
+    }
+
+    /// Returns a telemetry handle scoped to this module. When the daemon
+    /// built a real [`penguin_otel::OtelPipeline`] (`penguin.otel` license
+    /// flag on and pipeline construction succeeded — see
+    /// `bins/penguind/src/daemon_main.rs`), this is a live OTLP-backed
+    /// handle; otherwise it's the [`penguin_sdk::NoopTelemetry`] handle the
+    /// trait default would already return, made explicit here so the branch
+    /// is visible at this call site rather than only in the default body.
+    fn telemetry(&self) -> Arc<dyn penguin_sdk::ModuleTelemetry> {
+        match &self.otel {
+            Some(pipeline) => pipeline.scoped(&self.module),
+            None => Arc::new(penguin_sdk::NoopTelemetry),
+        }
     }
 }
 
@@ -119,13 +135,18 @@ pub struct DaemonHostFactory {
     license: Arc<dyn LicenseChecker>,
     events: Arc<dyn EventSink>,
     state_dir: PathBuf,
+    otel: Option<Arc<penguin_otel::OtelPipeline>>,
 }
 
 impl DaemonHostFactory {
     /// Builds a factory sharing `telemetry`, `config`, `secrets`, `license`,
-    /// and `events` across every module it constructs a host for. `secrets`
-    /// still yields each module its own isolated view — see
-    /// [`SecretStoreProvider`].
+    /// `events`, and `otel` across every module it constructs a host for.
+    /// `secrets` still yields each module its own isolated view — see
+    /// [`SecretStoreProvider`]. `otel` is `None` when telemetry export is
+    /// disabled (`penguin.otel` license flag off, or pipeline construction
+    /// failed) — every host built from this factory then falls back to
+    /// [`penguin_sdk::NoopTelemetry`] from [`DaemonHost::telemetry`].
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         telemetry: Arc<Telemetry>,
         config: Arc<ConfigStore>,
@@ -133,6 +154,7 @@ impl DaemonHostFactory {
         license: Arc<dyn LicenseChecker>,
         events: Arc<dyn EventSink>,
         state_dir: PathBuf,
+        otel: Option<Arc<penguin_otel::OtelPipeline>>,
     ) -> DaemonHostFactory {
         DaemonHostFactory {
             telemetry,
@@ -141,6 +163,7 @@ impl DaemonHostFactory {
             license,
             events,
             state_dir,
+            otel,
         }
     }
 }
@@ -152,6 +175,7 @@ impl HostFactory for DaemonHostFactory {
         let data_dir = ensure_data_dir(&self.state_dir, module, logger.as_ref());
 
         Arc::new(DaemonHost {
+            module: module.to_string(),
             logger: logger.clone(),
             secrets: self.secrets.store_for(module),
             license: self.license.clone(),
@@ -159,6 +183,7 @@ impl HostFactory for DaemonHostFactory {
             data_dir,
             events: self.events.clone(),
             config,
+            otel: self.otel.clone(),
         })
     }
 }
@@ -315,6 +340,7 @@ mod tests {
             Arc::new(FakeLicenseChecker),
             broker,
             state_dir.path().to_path_buf(),
+            None,
         );
         (config_dir, state_dir, factory)
     }
@@ -401,6 +427,7 @@ mod tests {
             Arc::new(FakeLicenseChecker),
             broker,
             blocking_file.clone(),
+            None,
         );
 
         let host = factory.host_for("squawk", None);
@@ -510,6 +537,7 @@ mod tests {
             Arc::new(FakeLicenseChecker),
             events,
             state_dir.path().to_path_buf(),
+            None,
         );
 
         let mut subscriber = broker.subscribe();
@@ -524,5 +552,52 @@ mod tests {
 
         let received = subscriber.recv().await.unwrap();
         assert_eq!(received.message, "via host");
+    }
+
+    /// When the factory holds a real (enabled) [`penguin_otel::OtelPipeline`],
+    /// `telemetry()` must return a handle scoped to the host's module rather
+    /// than the trait's `NoopTelemetry` default. Building an *enabled*
+    /// pipeline spins up OTLP/HTTP exporters that require a multi-thread
+    /// Tokio runtime (see `OtelPipeline::build`'s doc) — the endpoint points
+    /// at an unused localhost port, so this asserts the handle is real and
+    /// safe to call, not that anything is actually delivered.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn host_returns_scoped_telemetry_when_pipeline_present() {
+        let cfg = penguin_otel::OtelConfig {
+            endpoint: "http://127.0.0.1:1".to_string(),
+            sampling_ratio: 1.0,
+            enabled: true,
+        };
+        let pipeline =
+            Arc::new(penguin_otel::OtelPipeline::build(&cfg, &[("node_id", "test-node")]).unwrap());
+
+        let telemetry = Arc::new(Telemetry::new("error").unwrap());
+        let config_dir = TempDir::new().unwrap();
+        let state_dir = TempDir::new().unwrap();
+        let config_store = Arc::new(ConfigStore::new(config_dir.path()));
+        let broker: Arc<dyn EventSink> = Arc::new(EventBroker::new(4));
+        let factory = DaemonHostFactory::new(
+            telemetry,
+            config_store,
+            Arc::new(FakeSecretStoreProvider::default()),
+            Arc::new(FakeLicenseChecker),
+            broker,
+            state_dir.path().to_path_buf(),
+            Some(pipeline),
+        );
+
+        let host = factory.host_for("probe-module", None);
+        let handle = host.telemetry();
+        handle.counter_add("probe", 1, &[]);
+    }
+
+    /// With no pipeline (`otel: None` — the license flag off, or pipeline
+    /// build failed), `telemetry()` must fall back to the safe
+    /// [`penguin_sdk::NoopTelemetry`] handle: calling it must never panic.
+    #[test]
+    fn host_returns_noop_when_flag_off() {
+        let (_config_dir, _state_dir, factory) = test_factory();
+        let host = factory.host_for("probe-module", None);
+        host.telemetry().record_span("x", &[]);
     }
 }

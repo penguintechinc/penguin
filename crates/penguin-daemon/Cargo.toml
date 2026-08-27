@@ -17,6 +17,7 @@ workspace = true
 penguin-sdk.workspace = true
 penguin-proto.workspace = true
 penguin-telemetry.workspace = true
+penguin-otel.workspace = true
 # The external-plugin path: verification pipeline (manifest, ownership,
 # sha256, minisign) and the go-plugin host that launches a verified binary.
 # `external.rs` resolves a module name the builtin registry doesn't

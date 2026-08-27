@@ -14,6 +14,16 @@ workspace = true
 thiserror.workspace = true
 penguin-sdk.workspace = true
 tracing.workspace = true
+# Installs the process-default rustls crypto provider before the exporters'
+# reqwest::blocking::Client is built — see ensure_crypto_provider_installed's
+# doc in pipeline.rs. The workspace's reqwest entry uses `rustls-no-provider`
+# (deliberately, so every caller supplies its own provider explicitly rather
+# than reqwest silently picking one), so this crate must do the same install
+# every other reqwest-building crate here already does (penguin-licensing,
+# penguin-module-tobogganing, penguin-update, squawk-client,
+# waddlebot-client, penguin-goplugin-host) rather than relying on one of them
+# happening to run first in the same process.
+rustls.workspace = true
 
 # OpenTelemetry pipeline: exports over OTLP/HTTP (never grpc-tonic — the
 # workspace pins tonic/prost exactly for the go-plugin wire protocol, and

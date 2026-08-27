@@ -26,6 +26,9 @@ penguin-proto.workspace = true
 # bins/pdcli/Cargo.toml.
 penguin-secrets = { path = "../../crates/penguin-secrets" }
 penguin-licensing = { path = "../../crates/penguin-licensing" }
+# Builds the OTLP pipeline gated on the `penguin.otel` license flag — see
+# src/daemon_main.rs's otel wiring block.
+penguin-otel.workspace = true
 # Built-in module registry (squawk, and future built-ins) — see
 # `src/daemon_main.rs`'s `SupervisorConfig::registry` wiring.
 penguin-registry = { path = "../../crates/penguin-registry" }
@@ -56,9 +59,11 @@ service-manager.workspace = true
 tracing-subscriber.workspace = true
 # Startup error enum (DaemonBinError).
 thiserror.workspace = true
-# Resolves the daemon's own uid for PeerAuthInterceptor; already pulled in
-# transitively via penguin-ipc, so this adds no new dependency to the graph.
-nix.workspace = true
+# Resolves the daemon's own uid for PeerAuthInterceptor (already pulled in
+# transitively via penguin-ipc, so the base dependency adds nothing new) and,
+# via the extra "hostname" feature, the `node_id` resource attribute tagged
+# on every OTel export in src/daemon_main.rs's otel wiring block.
+nix = { workspace = true, features = ["hostname"] }
 
 [dev-dependencies]
 # Test-only scratch directories for host_wiring.rs's secret-store isolation
