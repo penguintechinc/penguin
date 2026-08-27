@@ -1,6 +1,7 @@
 //! SkausWatch: a monitoring and alerting endpoint client, implementing
 //! `penguin_sdk::Module`.
 
+mod commands;
 mod config;
 mod metrics;
 mod module;

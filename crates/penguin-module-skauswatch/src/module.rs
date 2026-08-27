@@ -42,7 +42,7 @@ const DEGRADED_MULTIPLIER: u32 = 2;
 
 /// The module's real state, held behind an `Arc` so [`SkausWatchModule::start`]
 /// can clone a handle into its spawned background task.
-struct Inner {
+pub(crate) struct Inner {
     host: OnceLock<Arc<dyn HostServices>>,
     client: OnceLock<Arc<SkausWatchClient>>,
     metrics: OnceLock<SkausWatchMetrics>,
@@ -53,7 +53,7 @@ struct Inner {
     /// Cached once enrollment succeeds (either loaded from the secret store
     /// or freshly registered) — see `ensure_identity`. Read every tick so a
     /// steady-state loop never re-hits the secret store once warm.
-    identity: StdMutex<Option<AgentIdentity>>,
+    pub(crate) identity: StdMutex<Option<AgentIdentity>>,
     /// Set on every heartbeat the Manager acknowledges — the age of this is
     /// what `update_health_probe` grades against `DEGRADED_MULTIPLIER`.
     last_heartbeat_ok: StdMutex<Option<SystemTime>>,
@@ -97,7 +97,7 @@ impl Inner {
 /// be `'static` and a bare `&self` cannot outlive the call.
 #[derive(Clone)]
 pub struct SkausWatchModule {
-    inner: Arc<Inner>,
+    pub(crate) inner: Arc<Inner>,
 }
 
 impl Default for SkausWatchModule {
@@ -297,19 +297,19 @@ impl Module for SkausWatchModule {
         }
     }
 
-    /// No commands yet (scaffold — filled in Task 6).
+    /// Returns the SkausWatch CLI command tree: `status` and `enroll`.
     fn commands(&self) -> Vec<CommandSpec> {
-        vec![]
+        crate::commands::command_tree()
     }
 
-    /// Dispatch returns "unknown command" (scaffold — filled in Task 6).
+    /// Dispatches a command path to its handler.
     async fn dispatch(
         &self,
-        _path: &[String],
-        _flags: &HashMap<String, String>,
-        _args: &[String],
+        path: &[String],
+        flags: &HashMap<String, String>,
+        args: &[String],
     ) -> Result<CommandResult, ModuleError> {
-        Err(ModuleError::new("unknown command"))
+        crate::commands::dispatch(self, path, flags, args).await
     }
 
     /// Returns the config schema.
@@ -1018,12 +1018,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn dispatch_unknown_command_is_an_error() {
+    async fn dispatch_unknown_command_returns_error_result() {
         let module = init_module().await;
-        let err = module
-            .dispatch(&[], &HashMap::new(), &[])
+        let result = module.dispatch(&[], &HashMap::new(), &[]).await.unwrap();
+        assert_eq!(result.exit_code, 1);
+        assert!(result.output.contains("no command specified"));
+    }
+
+    #[tokio::test]
+    async fn dispatch_status_json_returns_structured_result() {
+        let module = SkausWatchModule::new();
+        module.init(testutil::fake_host_default()).await.unwrap();
+        let flags = HashMap::from([("json".to_string(), "true".to_string())]);
+        let out = module
+            .dispatch(&["status".to_string()], &flags, &[])
             .await
-            .unwrap_err();
-        assert!(err.to_string().contains("unknown command"));
+            .expect("dispatch ok");
+        assert!(out.output.contains("enrolled") || out.output.contains("agent_id"));
     }
 }

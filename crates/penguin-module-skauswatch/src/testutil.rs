@@ -202,6 +202,12 @@ pub fn fake_host(
     Arc::new(host)
 }
 
+/// Builds a default ready-to-`init` [`HostServices`] double with canned
+/// placeholder values (useful for tests that don't need custom config).
+pub fn fake_host_default() -> Arc<dyn HostServices> {
+    fake_host("http://localhost:8080", "test-token", 10)
+}
+
 /// One canned HTTP response [`MockManager`] hands back for a route.
 #[derive(Debug, Clone)]
 pub struct MockResponse {
