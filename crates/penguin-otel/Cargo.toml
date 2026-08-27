@@ -12,3 +12,50 @@ workspace = true
 
 [dependencies]
 thiserror.workspace = true
+penguin-sdk.workspace = true
+tracing.workspace = true
+
+# OpenTelemetry pipeline: exports over OTLP/HTTP (never grpc-tonic — the
+# workspace pins tonic/prost exactly for the go-plugin wire protocol, and
+# opentelemetry-otlp's grpc-tonic feature would demand a different tonic and
+# conflict). Each crate pinned exactly as a self-consistent trio.
+#
+# HTTP client: reqwest-blocking-client, not reqwest-client. The default
+# (thread-based) BatchSpanProcessor/BatchLogProcessor/PeriodicReader this
+# crate uses explicitly do not support the async `reqwest-client`/
+# `hyper-client` — see opentelemetry_sdk::trace::BatchSpanProcessor's doc
+# comment ("async HTTP clients ... are not supported by this default
+# processor"). reqwest::blocking::Client manages its own internal runtime, so
+# it works from the processor's dedicated OS thread without requiring the
+# caller to be inside a Tokio context, and without pulling in the
+# `rt-tokio`/experimental-async-runtime feature family.
+#
+# TLS: neither `reqwest-blocking-client` (-> reqwest/blocking) nor
+# `http-proto` request reqwest default features or any TLS feature, so this
+# adds no new crypto backend to the graph — it rides the workspace's own
+# `reqwest` entry (hyper-rustls + aws-lc-rs). Verified with `cargo tree -p
+# reqwest -e features`: still resolves through aws-lc-rs, no `ring`. (`cargo
+# tree -i ring` does show `ring` in the workspace, but only via
+# boringtun/defguard_boringtun's WireGuard crypto — pre-existing, unrelated
+# to reqwest/TLS; see task-4-report.md.)
+opentelemetry = { version = "=0.32.0", default-features = false, features = [
+    "trace",
+    "metrics",
+    "logs",
+] }
+opentelemetry_sdk = { version = "=0.32.1", default-features = false, features = [
+    "trace",
+    "metrics",
+    "logs",
+] }
+opentelemetry-otlp = { version = "=0.32.0", default-features = false, features = [
+    "http-proto",
+    "reqwest-blocking-client",
+    "trace",
+    "metrics",
+    "logs",
+] }
+
+[dev-dependencies]
+tokio.workspace = true
+axum.workspace = true

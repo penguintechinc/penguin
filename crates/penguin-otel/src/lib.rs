@@ -1,11 +1,16 @@
 //! OpenTelemetry crate for the penguin endpoint agent.
 //!
-//! Provides configuration structures and error types for OpenTelemetry pipeline
-//! initialization. The actual pipeline setup (Task 4+) will use the types exported
-//! here alongside OpenTelemetry SDK/OTLP crates.
+//! Builds the real OTLP/HTTP export pipeline (metrics/traces/logs) and hands
+//! out [`ScopedTelemetry`] handles implementing `penguin_sdk::ModuleTelemetry`
+//! — the stable, OpenTelemetry-agnostic surface modules record telemetry
+//! through. See [`pipeline::OtelPipeline`] for the entry point.
 
 pub mod config;
 pub mod error;
+pub mod pipeline;
+pub mod telemetry;
 
 pub use config::OtelConfig;
 pub use error::OtelError;
+pub use pipeline::OtelPipeline;
+pub use telemetry::ScopedTelemetry;
