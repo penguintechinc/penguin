@@ -31,3 +31,45 @@ pub struct AgentIdentity {
     /// takes it as raw bytes via `.into_bytes()`.
     pub api_key: String,
 }
+
+/// Health-check payload posted to `/api/v1/endpoint/heartbeat` on every
+/// heartbeat interval.
+#[derive(Debug, Clone, Serialize)]
+pub struct HeartbeatBody {
+    /// Whether the agent's own self-check currently passes.
+    pub healthy: bool,
+    /// This crate's own build version (`CARGO_PKG_VERSION`), so the
+    /// Manager can flag endpoints running a stale module build.
+    pub module_version: String,
+}
+
+/// One observed event (module fault, policy violation, etc.), batched and
+/// posted to `/api/v1/endpoint/events`.
+#[derive(Debug, Clone, Serialize)]
+pub struct EndpointEvent {
+    /// Event category, defined by the emitting module (e.g.
+    /// `"module_fault"`).
+    pub kind: String,
+    /// Severity label (e.g. `"info"`, `"warning"`, `"critical"`).
+    pub severity: String,
+    /// Arbitrary structured detail specific to `kind` — free-form so
+    /// modules don't need a client-side schema change to add a field.
+    pub detail: serde_json::Value,
+    /// Unix timestamp (seconds) the event occurred, not when it was sent.
+    pub ts_unix: i64,
+}
+
+/// Runtime configuration the Manager hands back from
+/// `GET /api/v1/endpoint/config`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct AgentConfig {
+    /// Seconds between heartbeats the agent should use going forward. No
+    /// default — an agent must not silently fall back to a guessed cadence
+    /// if the Manager omits this field.
+    pub heartbeat_secs: u64,
+    /// Additional, module-specific config the Manager may send — defaults
+    /// to `Value::Null` so this client stays forward-compatible with new
+    /// fields it doesn't know about yet.
+    #[serde(default)]
+    pub extra: serde_json::Value,
+}

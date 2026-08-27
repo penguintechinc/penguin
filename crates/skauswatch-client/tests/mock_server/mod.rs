@@ -15,6 +15,7 @@
 //! task's own bookkeeping.
 #![allow(dead_code)]
 
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
@@ -26,6 +27,8 @@ use tokio::task::JoinHandle;
 #[derive(Debug, Clone, Default)]
 struct RecordedRequest {
     path: String,
+    /// Header names lowercased, values as sent.
+    headers: HashMap<String, String>,
     body: Vec<u8>,
 }
 
@@ -58,7 +61,7 @@ impl MockServer {
                 let last_request = Arc::clone(&last_request_for_loop);
                 let json_body = Arc::clone(&json_body);
                 tokio::spawn(async move {
-                    serve_one(stream, status, &json_body, &last_request).await;
+                    serve_one(stream, &last_request, |_req| (status, (*json_body).clone())).await;
                 });
             }
         });
@@ -100,6 +103,22 @@ impl MockServer {
         String::from_utf8_lossy(&recorded.body).contains(needle)
     }
 
+    /// The value of header `name` (case-insensitive) on the most recently
+    /// received request. `None` if no request has been received yet, or
+    /// the header wasn't sent — unlike [`Self::last_path`]/
+    /// [`Self::last_body_contains`], this doesn't panic on either case,
+    /// since a missing header is exactly what a caller needs to assert on
+    /// (see [`start_auth_echo`]'s 401 path).
+    pub fn last_header(&self, name: &str) -> Option<String> {
+        self.last_request
+            .lock()
+            .expect("mock server state mutex poisoned")
+            .as_ref()?
+            .headers
+            .get(&name.to_ascii_lowercase())
+            .cloned()
+    }
+
     /// Stops accepting connections and waits for the accept loop to fully
     /// exit, so the port is guaranteed closed before this returns.
     pub async fn stop(mut self) {
@@ -128,15 +147,93 @@ pub async fn start_register_ok(agent_id: &str, api_key: &str) -> MockServer {
     MockServer::start(200, body).await
 }
 
+/// Starts a server that answers 200 with a canned config body
+/// (`{"heartbeat_secs":30}` — a valid [`skauswatch_client::AgentConfig`]
+/// body, so `fetch_config` round-trips against it too) iff the request
+/// carries both a non-empty `x-agent-id` header and a well-formed
+/// `x-api-key` header (64 lowercase hex chars — a hex-encoded HMAC-SHA256
+/// digest), else 401. Doesn't recompute the HMAC itself (this test module
+/// never holds the signing key) — it only checks that
+/// `SkausWatchClient::send_signed` actually attached both auth headers,
+/// which is what these tests exist to prove.
+pub async fn start_auth_echo() -> MockServer {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind mock server listener");
+    let base_url = format!("http://{}", listener.local_addr().expect("local addr"));
+
+    let last_request: Arc<Mutex<Option<RecordedRequest>>> = Arc::new(Mutex::new(None));
+    let last_request_for_loop = Arc::clone(&last_request);
+
+    let accept_loop = tokio::spawn(async move {
+        loop {
+            let Ok((stream, _)) = listener.accept().await else {
+                return;
+            };
+            let last_request = Arc::clone(&last_request_for_loop);
+            tokio::spawn(async move {
+                serve_one(stream, &last_request, |req| {
+                    if has_valid_auth_headers(req) {
+                        (200, r#"{"heartbeat_secs":30}"#.to_string())
+                    } else {
+                        (401, "{}".to_string())
+                    }
+                })
+                .await;
+            });
+        }
+    });
+
+    MockServer {
+        base_url,
+        accept_loop: Some(accept_loop),
+        last_request,
+    }
+}
+
+/// Builds a [`skauswatch_client::SkausWatchClient`] pointed at `server`.
+/// `agent_id`/`api_key` don't affect how the client itself is built — auth
+/// happens per-call from the [`skauswatch_client::AgentIdentity`] each
+/// method takes directly — they're folded into a synthetic enrollment
+/// token purely so call sites read as "the client used by this agent" and
+/// the parameters aren't dead weight.
+pub fn client_for(
+    server: &MockServer,
+    agent_id: &str,
+    api_key: &str,
+) -> skauswatch_client::SkausWatchClient {
+    let cfg = skauswatch_client::ClientConfig::new(
+        server.base_url(),
+        format!("mock-enrollment-{agent_id}-{api_key}"),
+    );
+    skauswatch_client::SkausWatchClient::new(cfg).expect("client builds for mock server")
+}
+
+/// Whether `req` carries the two auth headers
+/// [`skauswatch_client::SkausWatchClient`]'s `send_signed` is required to
+/// attach: a non-empty `x-agent-id`, and an `x-api-key` that's exactly 64
+/// lowercase hex characters (a hex-encoded HMAC-SHA256 digest).
+fn has_valid_auth_headers(req: &RecordedRequest) -> bool {
+    let has_agent_id = req.headers.get("x-agent-id").is_some_and(|v| !v.is_empty());
+    let has_api_key = req
+        .headers
+        .get("x-api-key")
+        .is_some_and(|v| v.len() == 64 && v.chars().all(|c| c.is_ascii_hexdigit()));
+    has_agent_id && has_api_key
+}
+
 /// Reads one HTTP/1.1 request off `stream` (request line, headers, and an
-/// optional `Content-Length` body), records it, then writes `status` +
-/// `json_body` and closes the connection.
-async fn serve_one(
+/// optional `Content-Length` body), records it, computes a response via
+/// `respond` (called with the recorded request so a mock like
+/// [`MockServer::start_auth_echo`] can answer based on what was sent), then
+/// writes the response and closes the connection.
+async fn serve_one<F>(
     stream: TcpStream,
-    status: u16,
-    json_body: &str,
     last_request: &Arc<Mutex<Option<RecordedRequest>>>,
-) {
+    respond: F,
+) where
+    F: FnOnce(&RecordedRequest) -> (u16, String),
+{
     let (reader, mut writer) = stream.into_split();
     let mut reader = BufReader::new(reader);
 
@@ -154,6 +251,7 @@ async fn serve_one(
         .unwrap_or("")
         .to_string();
 
+    let mut headers = HashMap::new();
     let mut content_length = 0usize;
     loop {
         let mut line = String::new();
@@ -163,11 +261,16 @@ async fn serve_one(
         if bytes_read == 0 || line == "\r\n" {
             break;
         }
-        let lower = line.to_ascii_lowercase();
-        let Some(value) = lower.strip_prefix("content-length:") else {
+        let trimmed = line.trim_end();
+        let Some((name, value)) = trimmed.split_once(':') else {
             continue;
         };
-        content_length = value.trim().parse().unwrap_or(0);
+        let name = name.trim().to_ascii_lowercase();
+        let value = value.trim().to_string();
+        if name == "content-length" {
+            content_length = value.parse().unwrap_or(0);
+        }
+        headers.insert(name, value);
     }
 
     let mut body = vec![0u8; content_length];
@@ -175,11 +278,18 @@ async fn serve_one(
         return;
     }
 
+    let recorded = RecordedRequest {
+        path,
+        headers,
+        body,
+    };
+    let (status, json_body) = respond(&recorded);
+
     // Recorded before the response is written — see the module doc for why
     // this ordering matters.
     *last_request
         .lock()
-        .expect("mock server state mutex poisoned") = Some(RecordedRequest { path, body });
+        .expect("mock server state mutex poisoned") = Some(recorded);
 
     let head = format!(
         "HTTP/1.1 {} {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",

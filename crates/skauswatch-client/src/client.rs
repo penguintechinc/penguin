@@ -1,14 +1,28 @@
-//! The SkausWatch agent API client: registration against the Manager.
+//! The SkausWatch agent API client: registration against the Manager, plus
+//! the three HMAC-authenticated calls an enrolled agent makes on an ongoing
+//! basis (heartbeat, event reporting, config fetch).
 
 use std::time::Duration;
 
+use reqwest::Method;
+
+use crate::auth::HmacSigner;
 use crate::config::ClientConfig;
 use crate::error::ClientError;
-use crate::model::{AgentIdentity, RegisterRequest};
+use crate::model::{AgentConfig, AgentIdentity, EndpointEvent, HeartbeatBody, RegisterRequest};
 use crate::tls_support::ensure_crypto_provider_installed;
 
 /// Path the Manager exposes for agent enrollment.
 const REGISTER_PATH: &str = "/api/v1/endpoint/register";
+
+/// Path the Manager exposes for agent heartbeats.
+const HEARTBEAT_PATH: &str = "/api/v1/endpoint/heartbeat";
+
+/// Path the Manager exposes for batched event reporting.
+const EVENTS_PATH: &str = "/api/v1/endpoint/events";
+
+/// Path the Manager exposes for fetching an agent's runtime config.
+const CONFIG_PATH: &str = "/api/v1/endpoint/config";
 
 /// Request timeout for every call this client makes — matches
 /// `penguin-licensing`'s client default.
@@ -82,6 +96,82 @@ impl SkausWatchClient {
 
         let identity: AgentIdentity = response.json().await?;
         Ok(identity)
+    }
+
+    /// Reports agent health to `/api/v1/endpoint/heartbeat`, HMAC-signed
+    /// with `id`'s api_key. Any non-2xx response maps to
+    /// [`ClientError::Http`].
+    pub async fn heartbeat(
+        &self,
+        id: &AgentIdentity,
+        status: &HeartbeatBody,
+    ) -> Result<(), ClientError> {
+        let body = serde_json::to_vec(status)?;
+        self.send_signed(Method::POST, HEARTBEAT_PATH, id, body)
+            .await?;
+        Ok(())
+    }
+
+    /// Reports a batch of observed events to `/api/v1/endpoint/events`,
+    /// HMAC-signed with `id`'s api_key. Any non-2xx response maps to
+    /// [`ClientError::Http`].
+    pub async fn report_events(
+        &self,
+        id: &AgentIdentity,
+        events: &[EndpointEvent],
+    ) -> Result<(), ClientError> {
+        let body = serde_json::to_vec(events)?;
+        self.send_signed(Method::POST, EVENTS_PATH, id, body)
+            .await?;
+        Ok(())
+    }
+
+    /// Fetches this agent's current runtime config from
+    /// `/api/v1/endpoint/config` — an HMAC-signed GET over an empty body.
+    /// Any non-2xx response maps to [`ClientError::Http`].
+    pub async fn fetch_config(&self, id: &AgentIdentity) -> Result<AgentConfig, ClientError> {
+        let response = self
+            .send_signed(Method::GET, CONFIG_PATH, id, Vec::new())
+            .await?;
+        let config: AgentConfig = response.json().await?;
+        Ok(config)
+    }
+
+    /// Shared plumbing for every HMAC-authenticated call: serializes
+    /// nothing itself (the caller already has `body_bytes`), signs
+    /// `body_bytes` with an [`HmacSigner`] built from `id`, attaches the
+    /// resulting `x-agent-id`/`x-api-key` headers, sends the request, and
+    /// maps a non-2xx status to [`ClientError::Http`] before the caller
+    /// ever tries to parse a response body.
+    async fn send_signed(
+        &self,
+        method: Method,
+        path: &str,
+        id: &AgentIdentity,
+        body_bytes: Vec<u8>,
+    ) -> Result<reqwest::Response, ClientError> {
+        let signer = HmacSigner::new(id.agent_id.clone(), id.api_key.as_bytes().to_vec());
+        let auth_headers = signer.headers(&body_bytes);
+
+        let url = format!("{}{path}", self.cfg.base_url.trim_end_matches('/'));
+        let mut request = self
+            .http
+            .request(method, url)
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .body(body_bytes);
+        for (name, value) in auth_headers {
+            request = request.header(name, value);
+        }
+
+        let response = request.send().await?;
+
+        let status = response.status();
+        if !status.is_success() {
+            return Err(ClientError::Http {
+                status: status.as_u16(),
+            });
+        }
+        Ok(response)
     }
 }
 

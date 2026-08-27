@@ -14,4 +14,4 @@ pub use auth::HmacSigner;
 pub use client::SkausWatchClient;
 pub use config::ClientConfig;
 pub use error::ClientError;
-pub use model::{AgentIdentity, RegisterRequest};
+pub use model::{AgentConfig, AgentIdentity, EndpointEvent, HeartbeatBody, RegisterRequest};
