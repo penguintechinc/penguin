@@ -3657,6 +3657,7 @@ dependencies = [
 name = "penguin-registry"
 version = "0.2.0"
 dependencies = [
+ "penguin-module-skauswatch",
  "penguin-module-squawk",
  "penguin-module-tobogganing",
  "penguin-module-waddleai",
