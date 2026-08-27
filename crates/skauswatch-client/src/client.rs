@@ -88,17 +88,31 @@ impl SkausWatchClient {
 /// Best-effort local hostname for the registration payload. The Manager
 /// treats this field as informational only, never an identity key (that's
 /// [`AgentIdentity::agent_id`], assigned by the Manager itself at
-/// register), so a std-only lookup is enough — no new dependency for
-/// something this minor: `COMPUTERNAME` on Windows, `HOSTNAME` on Unix
-/// (exported by many shells/init systems, though not guaranteed), falling
-/// back to a fixed placeholder when neither is set.
+/// register) — but it's still the operator-facing label a monitoring
+/// product's admin uses to tell endpoints apart, so it must be the real
+/// hostname, not an env-var placeholder: `$HOSTNAME` is not exported under
+/// systemd units, Windows services, or most other supervisors — exactly how
+/// this agent runs in production — so an env-var fallback would report the
+/// same placeholder for most real deployments, defeating endpoint
+/// identification.
+///
+/// Unix: `nix::unistd::gethostname()`, the real `gethostname(2)` syscall —
+/// matches `bins/penguind/src/daemon_main.rs`'s identical call for the
+/// daemon's own `node_id`. Windows: `COMPUTERNAME`, which Windows reliably
+/// sets for every process (unlike Unix's `$HOSTNAME`). Only a genuine
+/// syscall/lookup failure falls back to the fixed placeholder.
 fn local_hostname() -> String {
+    #[cfg(unix)]
+    {
+        nix::unistd::gethostname()
+            .ok()
+            .and_then(|name| name.into_string().ok())
+            .unwrap_or_else(|| "unknown-host".to_string())
+    }
     #[cfg(windows)]
-    let var = "COMPUTERNAME";
-    #[cfg(not(windows))]
-    let var = "HOSTNAME";
-
-    std::env::var(var).unwrap_or_else(|_| "unknown-host".to_string())
+    {
+        std::env::var("COMPUTERNAME").unwrap_or_else(|_| "unknown-host".to_string())
+    }
 }
 
 #[cfg(test)]
@@ -109,5 +123,24 @@ mod tests {
     fn new_builds_a_client_for_a_valid_config() {
         let cfg = ClientConfig::new("https://manager.example.com".to_string(), "tok".to_string());
         assert!(SkausWatchClient::new(cfg).is_ok());
+    }
+
+    /// Regression guard for a prior version of `local_hostname()` that read
+    /// the `$HOSTNAME` env var, which most real deployments (systemd
+    /// units, Windows services, most other supervisors) never export — so
+    /// it silently fell back to `"unknown-host"` for nearly every endpoint.
+    /// Asserting equality with the real `gethostname(2)` result (not just
+    /// "non-empty") means any regression back to an env-var read fails this
+    /// test in this sandboxed CI environment too, where `$HOSTNAME` also
+    /// happens to be unset.
+    #[test]
+    #[cfg(unix)]
+    fn local_hostname_reports_the_real_syscall_hostname_on_unix() {
+        let expected = nix::unistd::gethostname()
+            .expect("gethostname(2) syscall")
+            .into_string()
+            .expect("hostname is valid UTF-8");
+        assert_eq!(local_hostname(), expected);
+        assert_ne!(local_hostname(), "unknown-host");
     }
 }

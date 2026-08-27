@@ -27,5 +27,14 @@ hmac = "=0.12.1"
 # SHA256 message digest for HMAC computation.
 sha2 = "=0.10.9"
 
+[target.'cfg(unix)'.dependencies]
+# Real hostname for the registration payload — see `client::local_hostname`'s
+# doc comment. `nix` is Unix-only (doesn't compile for Windows), so it's
+# target-gated here rather than a plain `[dependencies]` entry; Windows uses
+# `COMPUTERNAME` via std instead. Already in the workspace lock with the
+# "hostname" feature via `bins/penguind`'s identical use, so this adds no new
+# crate version to the graph.
+nix = { workspace = true, features = ["hostname"] }
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }
