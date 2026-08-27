@@ -95,6 +95,10 @@ impl ModuleTelemetry for ScopedTelemetry {
         }
         self.logger.emit(record);
     }
+
+    fn kind(&self) -> &'static str {
+        "otel"
+    }
 }
 
 fn to_otel_severity(level: LogLevel) -> Severity {

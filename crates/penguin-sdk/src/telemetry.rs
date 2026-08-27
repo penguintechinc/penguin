@@ -13,6 +13,13 @@ pub trait ModuleTelemetry: Send + Sync {
     fn record_span(&self, name: &str, attrs: &[(&str, &str)]);
     /// Emits a log record at `level` with the given message and attributes.
     fn emit_log(&self, level: LogLevel, message: &str, attrs: &[(&str, &str)]);
+
+    /// A short discriminator for the kind of sink this handle drives: "noop"
+    /// when telemetry is disabled, "otel" when it exports to the collector.
+    /// Lets callers and tests distinguish a live handle from the no-op fallback.
+    fn kind(&self) -> &'static str {
+        "noop"
+    }
 }
 
 /// The no-op handle returned when telemetry is disabled — every method does nothing.

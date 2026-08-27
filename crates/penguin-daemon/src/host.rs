@@ -589,6 +589,11 @@ mod tests {
         let host = factory.host_for("probe-module", None);
         let handle = host.telemetry();
         handle.counter_add("probe", 1, &[]);
+        // The real assertion: proves `host_for` actually threaded `otel`
+        // into this `DaemonHost` rather than silently falling back to
+        // `NoopTelemetry` — `counter_add` not panicking alone can't
+        // distinguish the two, since both handles are safe to call.
+        assert_eq!(handle.kind(), "otel");
     }
 
     /// With no pipeline (`otel: None` — the license flag off, or pipeline
@@ -598,6 +603,8 @@ mod tests {
     fn host_returns_noop_when_flag_off() {
         let (_config_dir, _state_dir, factory) = test_factory();
         let host = factory.host_for("probe-module", None);
-        host.telemetry().record_span("x", &[]);
+        let handle = host.telemetry();
+        handle.record_span("x", &[]);
+        assert_eq!(handle.kind(), "noop");
     }
 }
