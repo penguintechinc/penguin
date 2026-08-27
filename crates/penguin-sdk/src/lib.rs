@@ -17,6 +17,7 @@ pub mod host;
 pub mod module;
 pub mod plugin;
 pub mod status;
+pub mod telemetry;
 
 pub use command::{CommandResult, CommandSpec, FlagSpec, FlagType};
 pub use error::{MetricsError, ModuleError, SecretError};
@@ -26,3 +27,4 @@ pub use host::{
 };
 pub use module::{Factory, Module, ModuleInfo};
 pub use status::{HealthLevel, HealthReport, ModuleState, Status};
+pub use telemetry::{ModuleTelemetry, NoopTelemetry};
