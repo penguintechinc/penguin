@@ -64,9 +64,15 @@ message ModuleStatus {
   string health_message = 5;
   int64 checked_at_unix_nano = 6;
 }
+message OtelStatus {
+  bool enabled = 1;
+  string endpoint = 2;
+  string kind = 3;    // "otel" when exporting, "noop" when disabled
+}
 message GetStatusResponse {
   string daemon_version = 1;
   repeated ModuleStatus modules = 2;
+  OtelStatus otel = 3;
 }
 
 message ListCommandsRequest { string api_version = 1; }

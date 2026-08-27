@@ -90,6 +90,11 @@ pub fn build_static_root() -> Command {
                         .action(ArgAction::SetTrue),
                 ),
         )
+        .subcommand(
+            Command::new("otel")
+                .about("OpenTelemetry exporter commands")
+                .subcommand(Command::new("status").about("Show the daemon's OTel exporter status")),
+        )
 }
 
 /// Every name a module cannot use without colliding with a static verb.
@@ -100,8 +105,8 @@ pub fn build_static_root() -> Command {
 /// assertion time for a duplicate name, so a colliding module is skipped
 /// here rather than risking that panic. Not required by any test in the M4
 /// gate; recorded as a divergence in `docs/PARITY.md`.
-const RESERVED_STATIC_VERBS: [&str; 7] = [
-    "version", "modules", "load", "unload", "status", "logs", "update",
+const RESERVED_STATIC_VERBS: [&str; 8] = [
+    "version", "modules", "load", "unload", "status", "logs", "update", "otel",
 ];
 
 /// Grafts one top-level [`Command`] per module onto `root`, each carrying
@@ -267,10 +272,22 @@ mod tests {
         let root = build_static_root();
         let names: Vec<&str> = root.get_subcommands().map(Command::get_name).collect();
         for verb in [
-            "version", "modules", "load", "unload", "status", "logs", "update",
+            "version", "modules", "load", "unload", "status", "logs", "update", "otel",
         ] {
             assert!(names.contains(&verb), "missing static verb {verb}");
         }
+    }
+
+    #[test]
+    fn otel_status_subcommand_is_registered_and_parses() {
+        let root = build_static_root();
+        let matches = root
+            .try_get_matches_from(["pdcli", "otel", "status"])
+            .expect("otel status should parse");
+        let (name, sub) = matches.subcommand().expect("otel matched");
+        assert_eq!(name, "otel");
+        let (name, _) = sub.subcommand().expect("status matched under otel");
+        assert_eq!(name, "status");
     }
 
     #[test]

@@ -23,7 +23,7 @@ use penguin_daemon::external::{ExternalLoader, PluginDirLoader};
 use penguin_daemon::host::{DaemonHostFactory, HostFactory, SecretStoreProvider};
 use penguin_daemon::lock::{self, LockError};
 use penguin_daemon::logring::LogRing;
-use penguin_daemon::service::{DaemonService, UpdateClient};
+use penguin_daemon::service::{DaemonService, OtelStatusSummary, UpdateClient};
 use penguin_daemon::supervisor::{Supervisor, SupervisorConfig};
 use penguin_ipc::groups_unix::SystemGroups;
 use penguin_ipc::listen_unix::{self, ListenerConfig, PeerAuthInterceptor};
@@ -265,6 +265,14 @@ async fn run_daemon() -> Result<(), DaemonBinError> {
         },
         None,
     );
+    // `GetStatus`'s `otel` field reports the daemon's configured exporter
+    // state (`pdcli otel status`), independent of whether building the real
+    // pipeline below actually succeeded — `enabled`/`endpoint` reflect
+    // configuration intent, not pipeline build outcome.
+    let otel_status = OtelStatusSummary {
+        enabled: otel_cfg.enabled,
+        endpoint: otel_cfg.endpoint.clone(),
+    };
     let otel: Option<Arc<OtelPipeline>> = if otel_cfg.enabled {
         match OtelPipeline::build(
             &otel_cfg,
@@ -349,6 +357,7 @@ async fn run_daemon() -> Result<(), DaemonBinError> {
         logs,
         VERSION,
         Some(update_client),
+        otel_status,
     );
 
     let listener_cfg = ListenerConfig {

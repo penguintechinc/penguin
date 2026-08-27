@@ -110,6 +110,23 @@ pub fn render_log_line(line: &pb::LogLine) -> String {
 /// Matches `fmt.Println("TailLogs not implemented yet")`.
 pub const TAIL_LOGS_NOT_IMPLEMENTED: &str = "TailLogs not implemented yet\n";
 
+/// `penguin otel status`'s single summary line: whether the daemon's OTel
+/// exporter is enabled, the collector endpoint it targets, and the exporter
+/// kind (`"otel"` when actively exporting, `"noop"` when disabled — see
+/// `daemon.proto`'s `OtelStatus`).
+pub fn render_otel_status(otel: &pb::OtelStatus) -> String {
+    format!(
+        "otel: enabled={} endpoint={} kind={}\n",
+        otel.enabled, otel.endpoint, otel.kind
+    )
+}
+
+/// `penguin otel status` when the daemon's `GetStatus` response carries no
+/// `otel` field at all — only possible against an older daemon build that
+/// predates this field, since a current daemon always populates it.
+pub const OTEL_STATUS_UNAVAILABLE: &str =
+    "otel: status unavailable (daemon did not report otel status)\n";
+
 /// `penguin update`'s check-result lines. Matches
 /// `fmt.Printf("Current version: %s\n", ...)` followed by
 /// `fmt.Printf("Latest version: %s\n", ...)`.
@@ -231,6 +248,40 @@ mod tests {
         assert_eq!(
             render_log_line(&line),
             "[1970-01-01 00:00:00] info: started\n"
+        );
+    }
+
+    #[test]
+    fn render_otel_status_reports_enabled_endpoint_and_kind() {
+        let otel = pb::OtelStatus {
+            enabled: true,
+            endpoint: "http://localhost:4318".to_string(),
+            kind: "otel".to_string(),
+        };
+        assert_eq!(
+            render_otel_status(&otel),
+            "otel: enabled=true endpoint=http://localhost:4318 kind=otel\n"
+        );
+    }
+
+    #[test]
+    fn render_otel_status_reports_disabled_noop() {
+        let otel = pb::OtelStatus {
+            enabled: false,
+            endpoint: String::new(),
+            kind: "noop".to_string(),
+        };
+        assert_eq!(
+            render_otel_status(&otel),
+            "otel: enabled=false endpoint= kind=noop\n"
+        );
+    }
+
+    #[test]
+    fn otel_status_unavailable_constant_is_a_single_line() {
+        assert_eq!(
+            OTEL_STATUS_UNAVAILABLE,
+            "otel: status unavailable (daemon did not report otel status)\n"
         );
     }
 

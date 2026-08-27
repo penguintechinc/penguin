@@ -204,6 +204,7 @@ mod tests {
         let status = pb::GetStatusResponse {
             daemon_version: "1.2.3".to_string(),
             modules: vec![module_status("squawk", "degraded", "server down")],
+            otel: None,
         };
         let commands = pb::ListCommandsResponse {
             modules: vec![pb::ModuleCommands {
@@ -256,6 +257,7 @@ mod tests {
                 module_status("squawk", "healthy", ""),
                 module_status("ghost", "unhealthy", "should never surface"),
             ],
+            otel: None,
         };
         let commands = pb::ListCommandsResponse {
             modules: vec![
@@ -299,6 +301,7 @@ mod tests {
         let status = pb::GetStatusResponse {
             daemon_version: String::new(),
             modules: vec![module_status("squawk", "levitating", "")],
+            otel: None,
         };
 
         let joined = join_snapshot(&modules, &status, &pb::ListCommandsResponse::default());
