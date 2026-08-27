@@ -9,6 +9,13 @@ pub struct ModuleConfig {
     #[serde(default)]
     pub base_url: String,
 
+    /// Enrollment token issued out-of-band by the Manager operator, used to
+    /// register this agent the first time the heartbeat loop runs (see
+    /// `module.rs`'s `ensure_identity`) — never used again once an
+    /// [`skauswatch_client::AgentIdentity`] has been persisted.
+    #[serde(default)]
+    pub enrollment_token: String,
+
     /// Heartbeat interval in seconds for health checks.
     #[serde(default = "default_heartbeat_interval")]
     pub heartbeat_interval: u64,
@@ -22,6 +29,7 @@ impl Default for ModuleConfig {
     fn default() -> Self {
         ModuleConfig {
             base_url: String::new(),
+            enrollment_token: String::new(),
             heartbeat_interval: default_heartbeat_interval(),
         }
     }
@@ -36,6 +44,10 @@ pub const CONFIG_SCHEMA: &str = r#"{
       "type": "string",
       "description": "Base URL of the monitoring backend"
     },
+    "enrollment_token": {
+      "type": "string",
+      "description": "Enrollment token issued by the Manager operator, used to register this agent"
+    },
     "heartbeat_interval": {
       "type": "integer",
       "minimum": 1,
@@ -43,5 +55,5 @@ pub const CONFIG_SCHEMA: &str = r#"{
       "description": "Heartbeat interval in seconds"
     }
   },
-  "required": ["base_url"]
+  "required": ["base_url", "enrollment_token"]
 }"#;

@@ -22,7 +22,12 @@ pub struct RegisterRequest {
 /// The identity the Manager assigns an agent at registration. `api_key` is
 /// the shared secret [`crate::HmacSigner`] signs every subsequent request
 /// with; the Manager never sends it again after this response.
-#[derive(Debug, Clone, Deserialize)]
+///
+/// `Serialize` (alongside `Deserialize`) so a consuming module can persist
+/// this to its host's secret store after registration and round-trip it
+/// back out on a later run — see `penguin-module-skauswatch`'s
+/// `ensure_identity`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentIdentity {
     /// The agent ID the Manager assigned, sent back as the `x-agent-id`
     /// header on every signed request.

@@ -4,6 +4,8 @@
 mod config;
 mod metrics;
 mod module;
+#[cfg(test)]
+mod testutil;
 
 pub use module::{SkausWatchModule, factory};
 
