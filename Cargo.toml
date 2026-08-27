@@ -36,6 +36,7 @@ penguin-sdk = { path = "crates/penguin-sdk" }
 penguin-telemetry = { path = "crates/penguin-telemetry" }
 penguin-ipc = { path = "crates/penguin-ipc" }
 penguin-daemon = { path = "crates/penguin-daemon" }
+penguin-otel = { path = "crates/penguin-otel" }
 # The external-plugin path: verification pipeline + the go-plugin host that
 # launches a verified binary. The daemon depends on both so LoadModule can
 # resolve a builtin OR an external module through one code path.

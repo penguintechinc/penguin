@@ -3541,6 +3541,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "penguin-otel"
+version = "0.2.0"
+dependencies = [
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "penguin-proto"
 version = "0.2.0"
 dependencies = [
