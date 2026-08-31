@@ -3816,6 +3816,7 @@ dependencies = [
  "penguin-registry",
  "penguin-sdk",
  "penguin-secrets",
+ "penguin-selfprotect",
  "penguin-telemetry",
  "penguin-update",
  "service-manager",

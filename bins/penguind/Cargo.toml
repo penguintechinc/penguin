@@ -38,6 +38,13 @@ penguin-registry = { path = "../../crates/penguin-registry" }
 # left path-referenced here rather than switched to `.workspace = true` to
 # keep this task's diff scoped to penguin-selfprotect.
 penguin-update = { path = "../../crates/penguin-update" }
+# M8: authorizes `penguind service uninstall` (local secret / break-glass
+# token / console deauthorization) — see src/service/mod.rs's teardown
+# gate. Path-referenced rather than `.workspace = true`, matching the
+# convention above (penguin-secrets, penguin-licensing, penguin-update) of
+# keeping this binary's per-milestone crates path-scoped even once they're
+# promoted to workspace dependencies for another consumer.
+penguin-selfprotect = { path = "../../crates/penguin-selfprotect" }
 
 tokio.workspace = true
 tokio-stream.workspace = true
