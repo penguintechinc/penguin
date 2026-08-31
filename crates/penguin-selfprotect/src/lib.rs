@@ -25,5 +25,5 @@ mod manifest;
 
 pub use error::SelfProtectError;
 pub use event::{TamperFinding, TamperKind};
-pub use integrity::check;
+pub use integrity::{check, heal};
 pub use manifest::{IntegrityManifest, LocalFileSource, ManifestEntry, ManifestSource};

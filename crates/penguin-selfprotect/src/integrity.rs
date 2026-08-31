@@ -7,11 +7,12 @@
 //! classified as `BinaryModified`, `UnitModified`, or `ConfigModified` based
 //! on the file name or path.
 
+use std::fs;
 use std::path::Path;
 
 use sha2::{Digest, Sha256};
 
-use crate::{IntegrityManifest, TamperFinding, TamperKind};
+use crate::{IntegrityManifest, SelfProtectError, TamperFinding, TamperKind};
 
 /// Verifies that files referenced in a manifest exist on disk and match
 /// their expected SHA-256 hashes. Returns a [`Vec`] of [`TamperFinding`]
@@ -89,6 +90,41 @@ fn classify_tamper(path: &str) -> TamperKind {
     TamperKind::ConfigModified
 }
 
+/// Restores a tampered or missing file from its protected copy.
+///
+/// Copies the pristine file at `protected_dir.join(&finding.path)` over the
+/// file at `target_root.join(&finding.path)`, creating parent directories as
+/// needed and preserving the protected copy's file mode. Returns an error if
+/// the protected copy is missing, unreadable, or if I/O operations fail.
+pub fn heal(
+    finding: &TamperFinding,
+    protected_dir: &Path,
+    target_root: &Path,
+) -> Result<(), SelfProtectError> {
+    let protected_path = protected_dir.join(&finding.path);
+    let target_path = target_root.join(&finding.path);
+
+    // Read the protected (pristine) file.
+    let protected_contents = fs::read(&protected_path).map_err(SelfProtectError::Io)?;
+
+    // Get the protected copy's metadata to preserve file mode.
+    let protected_metadata = fs::metadata(&protected_path).map_err(SelfProtectError::Io)?;
+
+    // Create parent directories if they don't exist.
+    if let Some(parent) = target_path.parent() {
+        fs::create_dir_all(parent).map_err(SelfProtectError::Io)?;
+    }
+
+    // Write the protected contents to the target.
+    fs::write(&target_path, protected_contents).map_err(SelfProtectError::Io)?;
+
+    // Restore the file mode.
+    let permissions = protected_metadata.permissions();
+    fs::set_permissions(&target_path, permissions).map_err(SelfProtectError::Io)?;
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -155,5 +191,34 @@ mod tests {
             "Expected FileMissing finding for missing.conf; got findings: {:?}",
             findings
         );
+    }
+
+    #[test]
+    fn heal_restores_a_corrupted_file_from_protected_copy() {
+        let target = tempfile::tempdir().unwrap();
+        let protected = tempfile::tempdir().unwrap();
+        std::fs::write(protected.path().join("penguind"), b"real-binary").unwrap();
+        std::fs::write(target.path().join("penguind"), b"corrupted").unwrap();
+        let finding = TamperFinding {
+            path: "penguind".into(),
+            kind: TamperKind::BinaryModified,
+            expected_sha256: sha256_hex(b"real-binary"),
+            actual_sha256: Some(sha256_hex(b"corrupted")),
+        };
+        heal(&finding, protected.path(), target.path()).unwrap();
+        assert_eq!(
+            std::fs::read(target.path().join("penguind")).unwrap(),
+            b"real-binary"
+        );
+
+        // Test error path: protected copy absent.
+        let empty_protected = tempfile::tempdir().unwrap();
+        let finding_missing = TamperFinding {
+            path: "nonexistent".into(),
+            kind: TamperKind::FileMissing,
+            expected_sha256: sha256_hex(b"content"),
+            actual_sha256: None,
+        };
+        assert!(heal(&finding_missing, empty_protected.path(), target.path()).is_err());
     }
 }
