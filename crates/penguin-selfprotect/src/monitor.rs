@@ -178,4 +178,64 @@ mod tests {
             events[0].remediation
         );
     }
+
+    /// Finding 2 regression, at the loop level: a protected copy present
+    /// on disk but whose bytes don't match the manifest's expected hash
+    /// (poisoned protected copy) must surface as a heal failure in the
+    /// reported `TamperEvent`, not be silently accepted as healed and then
+    /// disappear from future cycles.
+    #[test]
+    fn scan_heal_report_records_a_heal_failure_when_the_protected_copy_is_poisoned() {
+        use crate::manifest::ManifestEntry;
+        use std::io::Cursor;
+
+        let mut manifest = IntegrityManifest {
+            version: 1,
+            entries: vec![ManifestEntry {
+                path: "bin/penguind".to_string(),
+                sha256: "a".repeat(64),
+                mode: 0o755,
+            }],
+            signature: String::new(),
+        };
+        let keypair =
+            minisign::KeyPair::generate_unencrypted_keypair().expect("generate minisign keypair");
+        let signature_box = minisign::sign(
+            Some(&keypair.pk),
+            &keypair.sk,
+            Cursor::new(manifest.canonical_bytes()),
+            None,
+            None,
+        )
+        .expect("sign fixture manifest");
+        manifest.signature = signature_box.into_string();
+        let pubkey = keypair.pk.to_box().expect("public key box").into_string();
+
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join("bin")).unwrap();
+        std::fs::write(root.path().join("bin/penguind"), b"on-disk contents").unwrap();
+
+        // Protected dir DOES have a copy, but its bytes don't hash to the
+        // manifest's expected sha256 ("a".repeat(64)) — a poisoned backup.
+        let protected = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(protected.path().join("bin")).unwrap();
+        std::fs::write(protected.path().join("bin/penguind"), b"poisoned-backup").unwrap();
+
+        let events = scan_heal_report(
+            &FixedSource(manifest),
+            &pubkey,
+            root.path(),
+            protected.path(),
+            "node-1",
+            42,
+            &NoopConsoleSink,
+        );
+
+        assert_eq!(events.len(), 1);
+        assert!(
+            events[0].remediation.starts_with("heal failed"),
+            "expected a heal-failure remediation for a poisoned protected copy, got: {}",
+            events[0].remediation
+        );
+    }
 }

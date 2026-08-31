@@ -28,4 +28,13 @@ pub enum SelfProtectError {
     /// or the plaintext that was being hashed.
     #[error("failed to hash tamper-protection secret")]
     Hashing,
+    /// [`crate::heal`] copied a file from its protected copy, but the
+    /// bytes that landed at the target path do not match the manifest's
+    /// expected SHA-256 hash — the protected copy itself may be
+    /// poisoned/tampered, or the write was corrupted. `heal` refuses to
+    /// report success in this case, rather than silently trusting an
+    /// unverified restore. Does not carry either hash: a caller deciding
+    /// whether the restore succeeded only ever needs "verified or not".
+    #[error("restored file failed post-heal integrity verification against the manifest")]
+    HealVerificationFailed,
 }

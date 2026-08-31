@@ -271,16 +271,6 @@ async fn run_daemon() -> Result<(), DaemonBinError> {
     logging::install(logs.clone(), &daemon_cfg.log_level);
     let telemetry = Arc::new(Telemetry::new(&daemon_cfg.log_level)?);
 
-    // Best-effort: spawn this daemon's mutual-supervision peer (see
-    // `crate::watchdog`'s module doc). Never fatal — a spawn failure here
-    // must not stop the daemon itself from starting, it only means the
-    // daemon-keeps-watchdog-alive half of mutual supervision didn't start
-    // this time (the watchdog side, once running, keeps trying to relaunch
-    // the daemon regardless). Placed after the single-instance lock is
-    // held, so a spawned watchdog's very first liveness check always finds
-    // a live daemon rather than racing this process's own startup.
-    spawn_watchdog_peer();
-
     let broker = Arc::new(EventBroker::new(EVENT_BROKER_CAPACITY));
     let events: Arc<dyn EventSink> = broker.clone();
 
@@ -371,12 +361,34 @@ async fn run_daemon() -> Result<(), DaemonBinError> {
         .get(SELFPROTECT_TAMPER_SECRET_KEY)
         .await
         .is_ok();
-    let selfprotect_loop = if is_armed(selfprotect_enrolled, selfprotect_flag_on) {
+    // Single arming decision, shared by both the integrity loop below and
+    // the watchdog peer spawn — see `spawn_watchdog_peer`'s doc for why the
+    // watchdog is gated on this exact same check rather than spawned
+    // unconditionally.
+    let selfprotect_armed = is_armed(selfprotect_enrolled, selfprotect_flag_on);
+    let selfprotect_loop = if selfprotect_armed {
         let selfprotect_telemetry: Arc<dyn ModuleTelemetry> = match &otel {
             Some(pipeline) => pipeline.scoped("selfprotect"),
             None => Arc::new(NoopTelemetry),
         };
         tracing::info!("selfprotect: armed; integrity loop starting");
+        // Best-effort: spawn this daemon's mutual-supervision peer (see
+        // `crate::watchdog`'s module doc). Never fatal — a spawn failure
+        // here must not stop the daemon itself from starting, it only
+        // means the daemon-keeps-watchdog-alive half of mutual supervision
+        // didn't start this time (the watchdog side, once running, keeps
+        // trying to relaunch the daemon regardless). Placed after the
+        // single-instance lock is held (acquired earlier in this
+        // function), so a spawned watchdog's very first liveness check
+        // always finds a live daemon rather than racing this process's own
+        // startup. Gated on `selfprotect_armed`, the same `is_armed` check
+        // the integrity loop uses just below: the watchdog peer is part of
+        // the flag-gated self-protection subsystem (spec §4.1), so an
+        // unenrolled/dev agent or a flag-off node gets neither the
+        // integrity loop nor the watchdog peer — only the unconditional
+        // systemd `Restart=always` (see `packaging/systemd/penguind.service`)
+        // still applies regardless of arming.
+        spawn_watchdog_peer();
         Some(spawn_selfprotect_loop(
             node_id.clone(),
             selfprotect_telemetry,
@@ -385,7 +397,7 @@ async fn run_daemon() -> Result<(), DaemonBinError> {
         tracing::debug!(
             enrolled = selfprotect_enrolled,
             flag_on = selfprotect_flag_on,
-            "selfprotect: not armed; integrity loop not started"
+            "selfprotect: not armed; integrity loop and watchdog peer not started"
         );
         None
     };
@@ -661,6 +673,14 @@ fn self_uid() -> u32 {
 /// on any failure; never treated as fatal to daemon startup — an endpoint
 /// agent that failed to start because its self-protection helper couldn't
 /// spawn would be strictly worse than one that starts without it.
+///
+/// Only ever called from `run_daemon`'s `selfprotect_armed` branch — the
+/// watchdog peer is part of the flag-gated self-protection subsystem (spec
+/// §4.1), so it must never spawn unconditionally. This does not affect the
+/// systemd unit's own `Restart=always`, which stays unconditional
+/// regardless of arming (see `packaging/systemd/penguind.service`) — that
+/// directive is the OS supervising this process, not this in-process
+/// watchdog peer.
 fn spawn_watchdog_peer() {
     let exe = match env::current_exe() {
         Ok(exe) => exe,
@@ -694,5 +714,38 @@ async fn wait_for_shutdown_signal() {
     tokio::select! {
         _ = sigint.recv() => tracing::info!(signal = "SIGINT", "received shutdown signal"),
         _ = sigterm.recv() => tracing::info!(signal = "SIGTERM", "received shutdown signal"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Finding 1 regression: `run_daemon` gates both the integrity loop and
+    /// `spawn_watchdog_peer` on the exact same `selfprotect_armed` value —
+    /// `is_armed(enrolled, flag_on)` — never spawning the watchdog peer
+    /// unconditionally. `run_daemon` itself can't be driven directly in a
+    /// unit test (it builds a real gRPC server, secret store, and license
+    /// client), so this pins down the arming decision those two call sites
+    /// share, matching `penguin_selfprotect::state`'s own
+    /// `armed_only_when_enrolled_and_flag_on` test.
+    #[test]
+    fn watchdog_and_integrity_loop_share_the_same_arming_gate() {
+        assert!(
+            is_armed(true, true),
+            "enrolled + flag on → both integrity loop and watchdog peer must arm"
+        );
+        assert!(
+            !is_armed(false, true),
+            "unenrolled → neither the integrity loop nor the watchdog peer may spawn"
+        );
+        assert!(
+            !is_armed(true, false),
+            "flag off → neither the integrity loop nor the watchdog peer may spawn"
+        );
+        assert!(
+            !is_armed(false, false),
+            "neither enrolled nor flagged on → neither may spawn"
+        );
     }
 }

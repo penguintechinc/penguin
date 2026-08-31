@@ -87,9 +87,13 @@ const BREAK_GLASS_PUBKEY: &str = "";
 
 /// Refusal message for an armed, unauthorized `uninstall` attempt. Names
 /// every recovery path — including break-glass — so a caller locked out by
-/// a lost local secret is never stuck.
+/// a lost local secret is never stuck. Recommends `--auth-stdin` over
+/// `--auth <secret>`: a CLI-arg secret is visible to any local user via
+/// `ps`/`/proc`, and lingers in shell history — see `critical-rules.md`
+/// Token & Secret Hygiene ("NEVER pass secrets as CLI args").
 const TEARDOWN_REFUSED_MESSAGE: &str = "uninstall refused: this endpoint is tamper-protected. \
-Provide --auth <secret>, a --break-glass <token>, or deauthorize the node in the Penguin \
+Provide --auth-stdin (reads the secret from stdin; recommended — --auth <secret> exposes the \
+secret to `ps`/shell history), a --break-glass <token>, or deauthorize the node in the Penguin \
 console. Break-glass recovery: docs/self-protection.md.";
 
 /// Operations `penguind service <action>` needs from the host OS's service
@@ -264,12 +268,65 @@ fn run_uninstall(
         .map_err(|err| format!("uninstall failed: {err}"))
 }
 
-/// Parses `--auth <secret>` and `--break-glass <token>` out of the full
-/// `service uninstall ...` argument list into a [`TeardownInput`]. Any
-/// other token (including `"service"` and `"uninstall"` themselves) is
-/// ignored, matching every other `penguind service` verb — none of which
-/// validate their argument lists either.
+/// Reads the teardown secret for `--auth-stdin`. A trait so
+/// [`parse_teardown_input_with_reader`] can be driven by an in-memory fake
+/// in tests instead of ever blocking on the process's real stdin — see
+/// `ServiceHost`'s own "Testability" precedent in this module's doc.
+trait TeardownSecretReader {
+    /// Reads and returns one secret. Implementations are responsible for
+    /// trimming any trailing line terminator.
+    fn read_secret(&mut self) -> io::Result<String>;
+}
+
+/// The production [`TeardownSecretReader`]: reads exactly one line from the
+/// process's real stdin, trimming the trailing `\n` (and a preceding `\r`,
+/// for a CRLF-terminated pipe) so the secret never carries a stray newline
+/// byte that would make it fail to match the stored hash.
+struct RealStdinReader;
+
+impl TeardownSecretReader for RealStdinReader {
+    fn read_secret(&mut self) -> io::Result<String> {
+        let mut line = String::new();
+        io::stdin().read_line(&mut line)?;
+        if line.ends_with('\n') {
+            line.pop();
+            if line.ends_with('\r') {
+                line.pop();
+            }
+        }
+        Ok(line)
+    }
+}
+
+/// Parses `--auth <secret>`, `--auth-stdin`, and `--break-glass <token>`
+/// out of the full `service uninstall ...` argument list into a
+/// [`TeardownInput`], reading stdin via the real process stdin. Any other
+/// token (including `"service"` and `"uninstall"` themselves) is ignored,
+/// matching every other `penguind service` verb — none of which validate
+/// their argument lists either. See
+/// [`parse_teardown_input_with_reader`] for the testable core.
 fn parse_teardown_input(args: &[String]) -> TeardownInput {
+    parse_teardown_input_with_reader(args, &mut RealStdinReader)
+}
+
+/// [`parse_teardown_input`]'s testable core: `reader` supplies the
+/// `--auth-stdin` secret instead of always reading the process's real
+/// stdin (see [`TeardownSecretReader`]).
+///
+/// `--auth-stdin` is the RECOMMENDED way to supply the local secret —
+/// unlike `--auth <secret>`, it never appears in `ps`/`/proc/<pid>/cmdline`
+/// or shell history (see `critical-rules.md` Token & Secret Hygiene).
+/// `--auth <secret>` is kept for compatibility. If `--auth-stdin` fails to
+/// read (closed stdin, I/O error), `secret` is left `None` — the same as
+/// if no auth flag were given at all — so a read failure fails closed into
+/// [`penguin_selfprotect::TeardownAuthz::Unauthorized`] rather than
+/// panicking or retrying. When both `--auth` and `--auth-stdin` are given,
+/// whichever appears last in `args` wins, matching every other repeated
+/// flag in this parser.
+fn parse_teardown_input_with_reader(
+    args: &[String],
+    reader: &mut dyn TeardownSecretReader,
+) -> TeardownInput {
     let mut secret = None;
     let mut break_glass = None;
 
@@ -277,6 +334,7 @@ fn parse_teardown_input(args: &[String]) -> TeardownInput {
     while let Some(arg) = rest.next() {
         match arg.as_str() {
             "--auth" => secret = rest.next().cloned(),
+            "--auth-stdin" => secret = reader.read_secret().ok(),
             "--break-glass" => break_glass = rest.next().cloned(),
             _ => {}
         }
@@ -645,6 +703,64 @@ mod tests {
         assert_eq!(
             result,
             Some(Err("uninstall failed: not installed".to_string()))
+        );
+    }
+
+    /// A [`TeardownSecretReader`] test double that returns a canned result
+    /// instead of ever touching the process's real stdin.
+    struct FakeStdinReader(io::Result<String>);
+
+    impl TeardownSecretReader for FakeStdinReader {
+        fn read_secret(&mut self) -> io::Result<String> {
+            match &self.0 {
+                Ok(secret) => Ok(secret.clone()),
+                Err(err) => Err(io::Error::new(err.kind(), err.to_string())),
+            }
+        }
+    }
+
+    #[test]
+    fn auth_stdin_populates_the_secret_from_the_injected_reader() {
+        let args = vec![
+            "service".to_string(),
+            "uninstall".to_string(),
+            "--auth-stdin".to_string(),
+        ];
+        let mut reader = FakeStdinReader(Ok("s3cret".to_string()));
+        let input = parse_teardown_input_with_reader(&args, &mut reader);
+        assert_eq!(input.secret, Some("s3cret".to_string()));
+        assert_eq!(input.break_glass, None);
+    }
+
+    #[test]
+    fn auth_stdin_read_failure_leaves_secret_unset_rather_than_panicking() {
+        let args = vec![
+            "service".to_string(),
+            "uninstall".to_string(),
+            "--auth-stdin".to_string(),
+        ];
+        let mut reader = FakeStdinReader(Err(io::Error::other("stdin closed")));
+        let input = parse_teardown_input_with_reader(&args, &mut reader);
+        assert_eq!(
+            input.secret, None,
+            "a failed read must fail closed, not panic"
+        );
+    }
+
+    #[test]
+    fn auth_stdin_secret_authorizes_exactly_like_auth_flag() {
+        let ctx = test_armed_ctx();
+        let args = vec![
+            "service".to_string(),
+            "uninstall".to_string(),
+            "--auth-stdin".to_string(),
+        ];
+        let mut reader = FakeStdinReader(Ok("s3cret".to_string()));
+        let input = parse_teardown_input_with_reader(&args, &mut reader);
+        assert_eq!(
+            authorize(&input, &ctx),
+            TeardownAuthz::LocalSecret,
+            "the secret read via --auth-stdin must authorize exactly like --auth <secret>"
         );
     }
 

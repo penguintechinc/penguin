@@ -22,11 +22,16 @@ managed endpoint. It is composed of four pieces, all shipped in this repo:
    `NoNewPrivileges=true`, etc.) — see that file for the full,
    directive-by-directive rationale.
 2. **Mutual watchdog.** `daemon_main::run_daemon` spawns a `penguind
-   watchdog` child at startup; the watchdog checks the daemon's liveness on
-   a fixed interval and relaunches it if it's gone, and the daemon does the
-   same for the watchdog. Killing either process alone does not stop the
-   agent — the survivor relaunches its peer within one supervision tick.
-   Source: `bins/penguind/src/watchdog.rs`.
+   watchdog` child on startup **once the node is armed** — the same
+   enrolled-AND-flag-on check (`is_armed`) gating the integrity loop below,
+   so an unenrolled/dev agent or a flag-off node gets no watchdog peer
+   either. Once running, the watchdog checks the daemon's liveness on a
+   fixed interval and relaunches it if it's gone, and the daemon does the
+   same for the watchdog. Killing either process alone does not stop an
+   armed agent — the survivor relaunches its peer within one supervision
+   tick. (The systemd unit's own `Restart=always`, piece 1 above, is
+   separate and always unconditional regardless of arming.) Source:
+   `bins/penguind/src/watchdog.rs`.
 3. **Signed-manifest integrity monitoring with self-heal.** The armed
    daemon periodically loads a controller-signed [`IntegrityManifest`],
    verifies its signature, hashes the binary/unit/config files it lists,
@@ -79,15 +84,25 @@ proceeds only when one of three authorized paths clears it (evaluated by
 
 | # | Path | Command / mechanism | Status |
 |---|---|---|---|
-| 1 | **Local secret** | `penguind service uninstall --auth <secret>` | Shipping in SP1 |
+| 1 | **Local secret** | `penguind service uninstall --auth-stdin` (recommended) or `--auth <secret>` | Shipping in SP1 |
 | 2 | **Break-glass token** | `penguind service uninstall --break-glass <token>` | Shipping in SP1; **inert until SP2 provisions the signing key** (see below) |
 | 3 | **Console deauthorization** | Node deauthorized from the Penguin console | **Coming with SP2** (the central console) |
 
-1. **Local secret** (`--auth <secret>`) — the tamper-protection secret set
-   at enroll time. Stored only as an Argon2id PHC hash
+1. **Local secret** — the tamper-protection secret set at enroll time.
+   Stored only as an Argon2id PHC hash
    (`penguin_selfprotect::hash_secret`/`verify_secret`), never in plaintext,
    never logged. Requires the caller to be root; a non-root caller cannot
-   use this path regardless of whether the secret is correct.
+   use this path regardless of whether the secret is correct. Two ways to
+   supply it:
+   - **`--auth-stdin` (recommended)** — reads the secret from stdin (one
+     line, trailing newline trimmed), e.g. `printf '%s' "$SECRET" |
+     penguind service uninstall --auth-stdin`. Never appears in `ps`,
+     `/proc/<pid>/cmdline`, or shell history.
+   - **`--auth <secret>`** — kept for compatibility, but the secret is
+     passed as a plain CLI argument: any local user can read it from `ps`
+     while the command runs, and it lingers in shell history. Use
+     `--auth-stdin` instead whenever possible (see `critical-rules.md`
+     Token & Secret Hygiene).
 2. **Break-glass token** (`--break-glass <token>`) — an offline,
    node-bound, Penguin-signed recovery token (a minisign signature over
    this node's hostname). Verified via
@@ -121,9 +136,10 @@ rather than the watchdog trying to resurrect a stop it didn't initiate (see
 If none of the three paths authorize the request, `uninstall` refuses with:
 
 ```
-uninstall refused: this endpoint is tamper-protected. Provide --auth <secret>,
-a --break-glass <token>, or deauthorize the node in the Penguin console.
-Break-glass recovery: docs/self-protection.md.
+uninstall refused: this endpoint is tamper-protected. Provide --auth-stdin (reads the
+secret from stdin; recommended — --auth <secret> exposes the secret to `ps`/shell history),
+a --break-glass <token>, or deauthorize the node in the Penguin console. Break-glass
+recovery: docs/self-protection.md.
 ```
 
 ## Break-glass recovery procedure
@@ -204,7 +220,7 @@ this subsystem exists to be suspicious of.
 | Auto-restart hardening (systemd/launchd) | Shipped | — |
 | Mutual watchdog | Shipped | — |
 | Signed-manifest integrity check + self-heal | Shipped (`LocalFileSource` manifest loading) | Server-fetched manifest source |
-| Local-secret teardown (`--auth`) | Shipped | — |
+| Local-secret teardown (`--auth-stdin` recommended, `--auth` kept for compatibility) | Shipped | — |
 | Break-glass token verification | Shipped (mechanism) | **Signing key provisioning** — makes `--break-glass` usable |
 | Console-recorded deauthorization | Stubbed (`NoopConsoleSink`, always `false`) | Real `ConsoleSink` + console UI |
 | Tamper event reporting to console | Stubbed (`NoopConsoleSink::report_tamper` no-ops) | Real reporting |

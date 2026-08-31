@@ -95,7 +95,26 @@ fn classify_tamper(path: &str) -> TamperKind {
 /// Copies the pristine file at `protected_dir.join(&finding.path)` over the
 /// file at `target_root.join(&finding.path)`, creating parent directories as
 /// needed and preserving the protected copy's file mode. Returns an error if
-/// the protected copy is missing, unreadable, or if I/O operations fail.
+/// the protected copy is missing, unreadable, if I/O operations fail, or if
+/// the restored bytes do not match the manifest's expected hash (see the
+/// re-verification step below).
+///
+/// # Defense in depth: re-verifying the restored bytes
+///
+/// After copying, the freshly-written file at `target_path` is re-read and
+/// re-hashed (SHA-256), and compared against `finding.expected_sha256`.
+/// Without this, a *poisoned protected copy* — planted alongside the
+/// tampered target, or corrupted independently — would be trusted blindly:
+/// `heal` would report success, and the next [`check`] cycle would find the
+/// target now matches that poisoned content (nothing compares it against
+/// the manifest at that point), so the poisoned bytes get "healed" in and
+/// re-healed every cycle without ever being flagged again. Re-reading from
+/// disk (rather than just re-hashing the in-memory bytes that were about to
+/// be written) also catches corruption introduced by the write itself, not
+/// only a bad protected copy. On mismatch this returns
+/// [`SelfProtectError::HealVerificationFailed`] — the poisoned copy is
+/// never claimed as healed, and `scan_heal_report` surfaces the failure via
+/// its per-finding remediation string instead of silently looping.
 pub fn heal(
     finding: &TamperFinding,
     protected_dir: &Path,
@@ -121,6 +140,17 @@ pub fn heal(
     // Restore the file mode.
     let permissions = protected_metadata.permissions();
     fs::set_permissions(&target_path, permissions).map_err(SelfProtectError::Io)?;
+
+    // Re-verify: hash what actually landed at `target_path` and compare
+    // against the manifest's expected hash before claiming success — see
+    // the doc above.
+    let restored_contents = fs::read(&target_path).map_err(SelfProtectError::Io)?;
+    let mut restored_hasher = Sha256::new();
+    restored_hasher.update(&restored_contents);
+    let restored_hash = format!("{:x}", restored_hasher.finalize());
+    if restored_hash != finding.expected_sha256 {
+        return Err(SelfProtectError::HealVerificationFailed);
+    }
 
     Ok(())
 }
@@ -220,6 +250,36 @@ mod tests {
             actual_sha256: None,
         };
         assert!(heal(&finding_missing, empty_protected.path(), target.path()).is_err());
+    }
+
+    /// Finding 2 regression: a protected copy whose on-disk bytes do NOT
+    /// match `expected_sha256` (as if the protected copy itself had been
+    /// poisoned/tampered) must never be trusted — `heal` must fail rather
+    /// than restoring the poisoned bytes and reporting success. Without the
+    /// post-heal re-verification, this poisoned copy would be "healed" in
+    /// once and then match on every subsequent `check` cycle, since nothing
+    /// would compare the restored bytes against the manifest again.
+    #[test]
+    fn heal_rejects_a_poisoned_protected_copy_that_does_not_match_the_manifest_hash() {
+        let target = tempfile::tempdir().unwrap();
+        let protected = tempfile::tempdir().unwrap();
+        // Protected copy exists and is readable, but its content does not
+        // hash to `expected_sha256` below.
+        std::fs::write(protected.path().join("penguind"), b"poisoned-backup").unwrap();
+        std::fs::write(target.path().join("penguind"), b"corrupted").unwrap();
+
+        let finding = TamperFinding {
+            path: "penguind".into(),
+            kind: TamperKind::BinaryModified,
+            expected_sha256: sha256_hex(b"real-binary"), // does NOT match "poisoned-backup"
+            actual_sha256: Some(sha256_hex(b"corrupted")),
+        };
+
+        let result = heal(&finding, protected.path(), target.path());
+        assert!(
+            matches!(result, Err(SelfProtectError::HealVerificationFailed)),
+            "expected HealVerificationFailed for a poisoned protected copy, got: {result:?}"
+        );
     }
 
     #[test]

@@ -78,7 +78,9 @@ pub enum TeardownAuthz {
 /// Caller-supplied credentials for a teardown/uninstall request. At most
 /// one of `secret` or `break_glass` need be present — either may authorize
 /// the request via [`authorize`], depending on [`TeardownCtx`].
-#[derive(Debug, Clone)]
+///
+/// Deliberately does not derive `Debug` — see the manual `impl` below.
+#[derive(Clone)]
 pub struct TeardownInput {
     /// Candidate plaintext for the local tamper-protection secret, if the
     /// caller supplied one.
@@ -86,6 +88,31 @@ pub struct TeardownInput {
     /// Candidate break-glass token (minisign signature text), if the
     /// caller supplied one.
     pub break_glass: Option<String>,
+}
+
+impl std::fmt::Debug for TeardownInput {
+    /// Redacts both fields rather than deriving `Debug`: `secret` is a
+    /// live plaintext credential and `break_glass` is a live recovery
+    /// token, so a derived `Debug` would let a future accidental
+    /// `tracing::debug!("{:?}", input)` (or similar) leak either straight
+    /// into logs. Prints `<redacted>` when a field is present, `None` when
+    /// it is absent — enough to see *that* credentials were supplied
+    /// without ever printing their value.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        fn presence(value: &Option<String>) -> &'static str {
+            if value.is_some() {
+                "<redacted>"
+            } else {
+                "None"
+            }
+        }
+        write!(
+            f,
+            "TeardownInput {{ secret: {}, break_glass: {} }}",
+            presence(&self.secret),
+            presence(&self.break_glass)
+        )
+    }
 }
 
 /// Everything [`authorize`] needs to know about this node's current state
@@ -312,6 +339,38 @@ mod tests {
                 &ctx
             ),
             TeardownAuthz::Unauthorized
+        );
+    }
+
+    #[test]
+    fn teardown_input_debug_redacts_secret_and_break_glass_when_present() {
+        let input = TeardownInput {
+            secret: Some("s3cret".to_string()),
+            break_glass: Some("break-glass-token-xyz".to_string()),
+        };
+        let debug_str = format!("{input:?}");
+        assert!(
+            !debug_str.contains("s3cret"),
+            "Debug output must not leak the secret: {debug_str}"
+        );
+        assert!(
+            !debug_str.contains("break-glass-token-xyz"),
+            "Debug output must not leak the break-glass token: {debug_str}"
+        );
+        assert!(debug_str.contains("<redacted>"));
+    }
+
+    #[test]
+    fn teardown_input_debug_shows_none_when_absent() {
+        let input = TeardownInput {
+            secret: None,
+            break_glass: None,
+        };
+        let debug_str = format!("{input:?}");
+        assert!(!debug_str.contains("<redacted>"));
+        assert_eq!(
+            debug_str,
+            "TeardownInput { secret: None, break_glass: None }"
         );
     }
 
