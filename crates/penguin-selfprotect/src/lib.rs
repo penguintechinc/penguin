@@ -8,14 +8,22 @@
 //! band, once, by the controller when a manifest is issued. See that
 //! crate's `verify.rs` for why minisign and why verify-only.
 //!
-//! This crate currently covers Task 1 of the agent self-protection plan:
-//! the manifest type, its signature check, and [`ManifestSource`] for
-//! loading one. Hashing the actual on-disk files against the manifest,
-//! periodic re-verification, and tamper response are later tasks — see
+//! Task 1: the manifest type, its signature check, and [`ManifestSource`]
+//! for loading one.
+//!
+//! Task 2: on-disk integrity verification via [`check`] — hashes files on
+//! disk, compares to the manifest, and produces [`TamperFinding`] for any
+//! mismatches or missing files.
+//!
+//! Later tasks: periodic re-verification and tamper response — see
 //! `.superpowers/sdd/2026-08-22-agent-self-protection/`.
 
 mod error;
+mod event;
+mod integrity;
 mod manifest;
 
 pub use error::SelfProtectError;
+pub use event::{TamperFinding, TamperKind};
+pub use integrity::check;
 pub use manifest::{IntegrityManifest, LocalFileSource, ManifestEntry, ManifestSource};

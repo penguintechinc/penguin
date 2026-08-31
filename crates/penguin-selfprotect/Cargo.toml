@@ -18,6 +18,9 @@ penguin-update.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+# SHA-256 hashing for integrity checks of on-disk files. Pure Rust, no C
+# dependency — same pin and reasoning as penguin-module-waddlebot's obs-adapter.
+sha2.workspace = true
 
 [dev-dependencies]
 # Test-only minisign *signing*: generates an ephemeral keypair and signs a
@@ -26,3 +29,5 @@ thiserror.workspace = true
 # Cargo.toml comment): `minisign-verify` is verify-only by design, so it
 # cannot produce a signature for the tamper-rejection test.
 minisign = "=0.9.1"
+# Temporary directories for integrity check tests with real files on disk.
+tempfile = "3"
