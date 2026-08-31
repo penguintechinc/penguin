@@ -3701,6 +3701,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "penguin-selfprotect"
+version = "0.2.0"
+dependencies = [
+ "minisign",
+ "penguin-update",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "penguin-telemetry"
 version = "0.2.0"
 dependencies = [

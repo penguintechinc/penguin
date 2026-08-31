@@ -33,9 +33,10 @@ penguin-otel.workspace = true
 # `src/daemon_main.rs`'s `SupervisorConfig::registry` wiring.
 penguin-registry = { path = "../../crates/penguin-registry" }
 # M7.2: the real self-updater `DaemonService`'s `UpdateClient` hook wires to
-# — see `src/daemon_main.rs`'s `SelfUpdateClient` adapter. Not a workspace
-# dependency yet, same per-milestone-path convention as the three crates
-# above.
+# — see `src/daemon_main.rs`'s `SelfUpdateClient` adapter. Now a workspace
+# dependency (promoted for penguin-selfprotect — see root Cargo.toml), but
+# left path-referenced here rather than switched to `.workspace = true` to
+# keep this task's diff scoped to penguin-selfprotect.
 penguin-update = { path = "../../crates/penguin-update" }
 
 tokio.workspace = true
