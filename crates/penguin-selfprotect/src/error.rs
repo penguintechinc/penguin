@@ -21,4 +21,11 @@ pub enum SelfProtectError {
     /// expected [`crate::IntegrityManifest`] shape.
     #[error("failed to parse integrity manifest: {0}")]
     Parse(#[source] serde_json::Error),
+    /// Argon2id hashing of a tamper-protection secret failed (an internal
+    /// `argon2` parameter/allocation error, not a verification mismatch —
+    /// see [`crate::verify_secret`] for the separate never-fails boolean
+    /// check). Does not carry the underlying `argon2::password_hash::Error`
+    /// or the plaintext that was being hashed.
+    #[error("failed to hash tamper-protection secret")]
+    Hashing,
 }

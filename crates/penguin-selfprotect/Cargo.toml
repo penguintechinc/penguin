@@ -11,6 +11,14 @@ publish = false
 workspace = true
 
 [dependencies]
+# Argon2id password hashing for the tamper-protection secret (see
+# `authz.rs`): `hash_secret` produces a PHC string via `Argon2::default()`
+# (Argon2id, OWASP-recommended default params), `verify_secret` parses and
+# checks it. Risk-bearing crypto crate — exact pin.
+# "std" is required so `password-hash`'s re-exported `rand_core::OsRng`
+# is actually compiled in (`OsRng` is itself gated behind rand_core's own
+# `getrandom` feature, which `password-hash`'s `std` feature enables).
+argon2 = { version = "=0.5.3", features = ["std"] }
 # Minisign signature verification for the IntegrityManifest — the same
 # verify-only wrapper penguin-update's release archives go through. See
 # that crate's `verify.rs` doc for why minisign and why verify-only.

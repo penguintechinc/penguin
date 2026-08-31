@@ -15,14 +15,20 @@
 //! disk, compares to the manifest, and produces [`TamperFinding`] for any
 //! mismatches or missing files.
 //!
+//! Task 4: the tamper-protection secret's hash/verify pair,
+//! [`hash_secret`]/[`verify_secret`] — Argon2id, never plaintext at rest or
+//! in logs.
+//!
 //! Later tasks: periodic re-verification and tamper response — see
 //! `.superpowers/sdd/2026-08-22-agent-self-protection/`.
 
+mod authz;
 mod error;
 mod event;
 mod integrity;
 mod manifest;
 
+pub use authz::{hash_secret, verify_secret};
 pub use error::SelfProtectError;
 pub use event::{TamperFinding, TamperKind};
 pub use integrity::{check, heal};
