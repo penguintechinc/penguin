@@ -212,6 +212,16 @@ async fn run_daemon() -> Result<(), DaemonBinError> {
     logging::install(logs.clone(), &daemon_cfg.log_level);
     let telemetry = Arc::new(Telemetry::new(&daemon_cfg.log_level)?);
 
+    // Best-effort: spawn this daemon's mutual-supervision peer (see
+    // `crate::watchdog`'s module doc). Never fatal — a spawn failure here
+    // must not stop the daemon itself from starting, it only means the
+    // daemon-keeps-watchdog-alive half of mutual supervision didn't start
+    // this time (the watchdog side, once running, keeps trying to relaunch
+    // the daemon regardless). Placed after the single-instance lock is
+    // held, so a spawned watchdog's very first liveness check always finds
+    // a live daemon rather than racing this process's own startup.
+    spawn_watchdog_peer();
+
     let broker = Arc::new(EventBroker::new(EVENT_BROKER_CAPACITY));
     let events: Arc<dyn EventSink> = broker.clone();
 
@@ -436,6 +446,31 @@ fn ensure_state_dir(path: &Path) -> std::io::Result<()> {
 /// own uid is always authorized" rule.
 fn self_uid() -> u32 {
     nix::unistd::Uid::current().as_raw()
+}
+
+/// Best-effort spawn of `penguind watchdog` — the daemon-keeps-watchdog-
+/// alive half of mutual supervision (see `crate::watchdog`'s module doc for
+/// the full picture, including how the watchdog side guards against
+/// accumulating a duplicate on every crash-restart cycle). Logs and returns
+/// on any failure; never treated as fatal to daemon startup — an endpoint
+/// agent that failed to start because its self-protection helper couldn't
+/// spawn would be strictly worse than one that starts without it.
+fn spawn_watchdog_peer() {
+    let exe = match env::current_exe() {
+        Ok(exe) => exe,
+        Err(err) => {
+            tracing::warn!(
+                error = %err,
+                "failed to resolve own executable path; watchdog peer not started"
+            );
+            return;
+        }
+    };
+
+    match std::process::Command::new(exe).arg("watchdog").spawn() {
+        Ok(_child) => tracing::info!("spawned watchdog peer"),
+        Err(err) => tracing::warn!(error = %err, "failed to spawn watchdog peer"),
+    }
 }
 
 /// Resolves once SIGINT or SIGTERM arrives, driving
