@@ -24,22 +24,30 @@
 //! node-bound break-glass token ([`verify_break_glass`]), and the local
 //! secret from Task 4.
 //!
-//! Later tasks: periodic re-verification and tamper response — see
-//! `.superpowers/sdd/2026-08-22-agent-self-protection/`.
+//! Task 10: the daemon-facing loop body, [`scan_heal_report`] — load,
+//! verify, [`check`], [`heal`], and report a [`TamperEvent`] per finding to
+//! a [`ConsoleSink`] — plus [`TamperEvent`]/[`TamperEventKind`] themselves.
+//! [`NoopConsoleSink`] is the only [`ConsoleSink`] implementation until SP2
+//! (see `console.rs`'s module doc). The daemon's own arming/wiring
+//! (`penguind::daemon_main`) is outside this crate.
 
 mod authz;
+mod console;
 mod error;
 mod event;
 mod integrity;
 mod manifest;
+mod monitor;
 mod state;
 
 pub use authz::{
     TeardownAuthz, TeardownCtx, TeardownInput, authorize, hash_secret, verify_break_glass,
     verify_secret,
 };
+pub use console::{ConsoleSink, NoopConsoleSink};
 pub use error::SelfProtectError;
-pub use event::{TamperFinding, TamperKind};
+pub use event::{TamperEvent, TamperEventKind, TamperFinding, TamperKind};
 pub use integrity::{check, heal};
 pub use manifest::{IntegrityManifest, LocalFileSource, ManifestEntry, ManifestSource};
+pub use monitor::scan_heal_report;
 pub use state::{ProtectionState, is_armed};

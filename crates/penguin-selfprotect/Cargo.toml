@@ -29,6 +29,11 @@ thiserror.workspace = true
 # SHA-256 hashing for integrity checks of on-disk files. Pure Rust, no C
 # dependency — same pin and reasoning as penguin-module-waddlebot's obs-adapter.
 sha2.workspace = true
+# Structured logging for `monitor.rs`'s `scan_heal_report`: a failed
+# manifest load/verification or heal attempt is logged and safely no-opped,
+# never panicked on — same convention as penguin-licensing/penguin-update's
+# own `tracing::debug!`/`tracing::warn!` use in their fallback paths.
+tracing.workspace = true
 
 [dev-dependencies]
 # Test-only minisign *signing*: generates an ephemeral keypair and signs a
