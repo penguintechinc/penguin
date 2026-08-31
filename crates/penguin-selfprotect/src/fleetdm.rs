@@ -66,7 +66,6 @@ pub fn fleet_resource_attrs(status: &FleetStatus) -> Vec<(&'static str, String)>
 /// Searches for binaries in PATH and well-known installation directories.
 /// This is detect-only; we never start, stop, or configure FleetDM.
 #[cfg(unix)]
-#[allow(dead_code)]
 pub struct RealFleetProbe;
 
 #[cfg(unix)]
