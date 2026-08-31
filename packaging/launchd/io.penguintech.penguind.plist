@@ -25,6 +25,7 @@
     </array>
     <key>RunAtLoad</key>
     <true/>
+    <!-- Self-protection auto-restart: always restart on exit -->
     <key>KeepAlive</key>
     <dict>
         <key>SuccessfulExit</key>

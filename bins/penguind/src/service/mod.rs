@@ -378,6 +378,21 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn systemd_unit_is_hardened_for_auto_restart() {
+        let unit = super::SYSTEMD_UNIT;
+        assert!(unit.contains("Restart=always"));
+        assert!(unit.contains("StartLimitIntervalSec=0"));
+        assert!(unit.contains("RestartSec="));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn launchd_plist_keepalive_true() {
+        assert!(super::LAUNCHD_PLIST.contains("KeepAlive"));
+    }
+
     #[test]
     fn install_failure_is_wrapped_go_style() {
         let host = FakeServiceHost::new();
