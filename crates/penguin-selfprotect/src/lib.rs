@@ -32,6 +32,7 @@ mod error;
 mod event;
 mod integrity;
 mod manifest;
+mod state;
 
 pub use authz::{
     TeardownAuthz, TeardownCtx, TeardownInput, authorize, hash_secret, verify_break_glass,
@@ -41,3 +42,4 @@ pub use error::SelfProtectError;
 pub use event::{TamperFinding, TamperKind};
 pub use integrity::{check, heal};
 pub use manifest::{IntegrityManifest, LocalFileSource, ManifestEntry, ManifestSource};
+pub use state::{ProtectionState, is_armed};
