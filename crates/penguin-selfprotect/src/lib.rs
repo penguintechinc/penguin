@@ -48,7 +48,7 @@ pub use authz::{
 pub use console::{ConsoleSink, NoopConsoleSink};
 pub use error::SelfProtectError;
 pub use event::{TamperEvent, TamperEventKind, TamperFinding, TamperKind};
-pub use fleetdm::{FleetProbe, FleetStatus, detect};
+pub use fleetdm::{FleetProbe, FleetStatus, RealFleetProbe, detect, fleet_resource_attrs};
 pub use integrity::{check, heal};
 pub use manifest::{IntegrityManifest, LocalFileSource, ManifestEntry, ManifestSource};
 pub use monitor::scan_heal_report;

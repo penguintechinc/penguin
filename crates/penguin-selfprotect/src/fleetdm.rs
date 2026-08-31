@@ -41,6 +41,26 @@ pub fn detect(probe: &dyn FleetProbe) -> FleetStatus {
     }
 }
 
+/// Builds OTel resource attributes reporting detected FleetDM/osqueryd
+/// coexistence, for merging into the daemon's `OtelPipeline::build` resource
+/// attrs alongside `node_id`/`service.version`.
+///
+/// Convention: only PRESENT binaries get an entry (`fleet_dm.fleetd` /
+/// `fleet_dm.osqueryd`, valued with the detected version string) — an absent
+/// binary is omitted entirely rather than emitted as `"absent"`, so a host
+/// with no FleetDM coexistence adds zero resource attrs and stays invisible
+/// in telemetry rather than noisy.
+pub fn fleet_resource_attrs(status: &FleetStatus) -> Vec<(&'static str, String)> {
+    let mut attrs = Vec::with_capacity(2);
+    if let Some(version) = &status.fleetd {
+        attrs.push(("fleet_dm.fleetd", version.clone()));
+    }
+    if let Some(version) = &status.osqueryd {
+        attrs.push(("fleet_dm.osqueryd", version.clone()));
+    }
+    attrs
+}
+
 /// Real probe implementation that checks the filesystem.
 ///
 /// Searches for binaries in PATH and well-known installation directories.
@@ -119,5 +139,36 @@ mod tests {
         let s = detect(&Fake { has_fleetd: true });
         assert_eq!(s.fleetd.as_deref(), Some("1.30.0"));
         assert!(s.osqueryd.is_none());
+    }
+
+    #[test]
+    fn fleet_resource_attrs_includes_present_binary_and_omits_absent() {
+        let status = FleetStatus {
+            fleetd: Some("1.30.0".to_string()),
+            osqueryd: None,
+        };
+        let attrs = fleet_resource_attrs(&status);
+        assert!(attrs.contains(&("fleet_dm.fleetd", "1.30.0".to_string())));
+        assert!(!attrs.iter().any(|(k, _)| *k == "fleet_dm.osqueryd"));
+    }
+
+    #[test]
+    fn fleet_resource_attrs_includes_both_when_both_present() {
+        let status = FleetStatus {
+            fleetd: Some("1.30.0".to_string()),
+            osqueryd: Some("5.12.2".to_string()),
+        };
+        let attrs = fleet_resource_attrs(&status);
+        assert!(attrs.contains(&("fleet_dm.fleetd", "1.30.0".to_string())));
+        assert!(attrs.contains(&("fleet_dm.osqueryd", "5.12.2".to_string())));
+    }
+
+    #[test]
+    fn fleet_resource_attrs_empty_when_neither_present() {
+        let status = FleetStatus {
+            fleetd: None,
+            osqueryd: None,
+        };
+        assert!(fleet_resource_attrs(&status).is_empty());
     }
 }

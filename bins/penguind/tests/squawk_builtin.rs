@@ -51,7 +51,7 @@ use penguin_daemon::broker::EventBroker;
 use penguin_daemon::config::ConfigStore;
 use penguin_daemon::host::{DaemonHostFactory, HostFactory, SecretStoreProvider};
 use penguin_daemon::logring::LogRing;
-use penguin_daemon::service::{DaemonService, OtelStatusSummary};
+use penguin_daemon::service::{DaemonService, FleetDmStatusSummary, OtelStatusSummary};
 use penguin_daemon::supervisor::{Supervisor, SupervisorConfig};
 use penguin_proto::daemon::v1 as pb;
 use penguin_proto::daemon::v1::daemon_server::Daemon;
@@ -294,6 +294,7 @@ async fn build_stack() -> TestStack {
         "itest",
         None,
         OtelStatusSummary::default(),
+        FleetDmStatusSummary::default(),
     );
 
     TestStack {

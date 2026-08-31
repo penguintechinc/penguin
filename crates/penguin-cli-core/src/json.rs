@@ -215,6 +215,7 @@ mod tests {
                 checked_at_unix_nano: 0,
             }],
             otel: None,
+            fleet_dm: None,
         };
         let text = status_json(&response);
         assert!(text.contains("\"daemon_version\": \"0.2.0\""));

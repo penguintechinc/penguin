@@ -23,7 +23,9 @@ use penguin_daemon::external::{ExternalLoader, PluginDirLoader};
 use penguin_daemon::host::{DaemonHostFactory, HostFactory, SecretStoreProvider};
 use penguin_daemon::lock::{self, LockError};
 use penguin_daemon::logring::LogRing;
-use penguin_daemon::service::{DaemonService, OtelStatusSummary, UpdateClient};
+use penguin_daemon::service::{
+    DaemonService, FleetDmStatusSummary, OtelStatusSummary, UpdateClient,
+};
 use penguin_daemon::supervisor::{Supervisor, SupervisorConfig};
 use penguin_ipc::groups_unix::SystemGroups;
 use penguin_ipc::listen_unix::{self, ListenerConfig, PeerAuthInterceptor};
@@ -38,7 +40,8 @@ use penguin_sdk::{
 };
 use penguin_secrets::{Backend as SecretsBackend, Config as SecretsConfig, Store as SecretsStore};
 use penguin_selfprotect::{
-    LocalFileSource, ManifestSource, NoopConsoleSink, is_armed, scan_heal_report,
+    LocalFileSource, ManifestSource, NoopConsoleSink, RealFleetProbe, detect, fleet_resource_attrs,
+    is_armed, scan_heal_report,
 };
 use penguin_telemetry::{Telemetry, TelemetryError};
 use tokio_util::sync::CancellationToken;
@@ -312,6 +315,16 @@ async fn run_daemon() -> Result<(), DaemonBinError> {
     // etc.) degrades to no telemetry rather than aborting startup — modules
     // still get a safe `NoopTelemetry` handle either way, see
     // `penguin_daemon::host::DaemonHost::telemetry`.
+    // FleetDM/osqueryd coexistence: detect-only, never start/stop/configure
+    // FleetDM (see `penguin_selfprotect::fleetdm`'s module doc). Runs
+    // unconditionally, independent of the `penguin.otel` gate below —
+    // `GetStatus`'s `fleet_dm` field must report a real answer even when
+    // otel export itself is disabled.
+    let fleet = detect(&RealFleetProbe);
+    let fleet_dm_status = FleetDmStatusSummary {
+        fleetd: fleet.fleetd.clone(),
+        osqueryd: fleet.osqueryd.clone(),
+    };
     let node_id = nix::unistd::gethostname()
         .ok()
         .and_then(|name| name.into_string().ok())
@@ -332,11 +345,21 @@ async fn run_daemon() -> Result<(), DaemonBinError> {
         enabled: otel_cfg.enabled,
         endpoint: otel_cfg.endpoint.clone(),
     };
+    // `OtelPipeline::build` takes a borrowed `&[(&str, &str)]`, so the owned
+    // values (node_id/service.version plus any detected FleetDM coexistence
+    // attrs) are built first and must outlive the borrowed view constructed
+    // from them below.
+    let mut owned_resource_attrs: Vec<(&str, String)> = vec![
+        ("node_id", node_id.clone()),
+        ("service.version", VERSION.to_string()),
+    ];
+    owned_resource_attrs.extend(fleet_resource_attrs(&fleet));
+    let resource_attrs: Vec<(&str, &str)> = owned_resource_attrs
+        .iter()
+        .map(|(key, value)| (*key, value.as_str()))
+        .collect();
     let otel: Option<Arc<OtelPipeline>> = if otel_cfg.enabled {
-        match OtelPipeline::build(
-            &otel_cfg,
-            &[("node_id", node_id.as_str()), ("service.version", VERSION)],
-        ) {
+        match OtelPipeline::build(&otel_cfg, &resource_attrs) {
             Ok(pipeline) => Some(Arc::new(pipeline)),
             Err(err) => {
                 tracing::warn!(error = %err, "failed to build otel pipeline; telemetry export disabled");
@@ -472,6 +495,7 @@ async fn run_daemon() -> Result<(), DaemonBinError> {
         VERSION,
         Some(update_client),
         otel_status,
+        fleet_dm_status,
     );
 
     let listener_cfg = ListenerConfig {
