@@ -506,10 +506,10 @@ async fn run_daemon() -> Result<(), DaemonBinError> {
     license_refresh.stop().await;
     // Stop the self-protection loop (if armed) *before* the otel flush
     // attempt below: `SelfProtectLoopHandle::stop` awaits the loop task's
-    // actual exit, guaranteeing its `ModuleTelemetry` handle — and the
-    // `Arc<OtelPipeline>` clone `OtelPipeline::scoped` hands back — is
-    // dropped first, so `Arc::into_inner(pipeline)` below has its best
-    // chance of finding this the sole surviving reference.
+    // actual exit, so the loop can never call into the OTel providers after
+    // `pipeline.shutdown()` runs — and dropping its `ModuleTelemetry` handle
+    // first also gives `Arc::into_inner(pipeline)` below its best chance of
+    // finding this the sole surviving reference.
     if let Some(handle) = selfprotect_loop {
         handle.stop().await;
     }

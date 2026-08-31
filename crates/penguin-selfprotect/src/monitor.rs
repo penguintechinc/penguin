@@ -113,4 +113,69 @@ mod tests {
         );
         assert!(events.is_empty());
     }
+
+    /// A [`ManifestSource`] that always returns the signed manifest it was
+    /// built with — used to reach `scan_heal_report`'s check/heal path
+    /// without going through disk.
+    struct FixedSource(IntegrityManifest);
+
+    impl ManifestSource for FixedSource {
+        fn load(&self) -> Result<IntegrityManifest, SelfProtectError> {
+            Ok(self.0.clone())
+        }
+    }
+
+    #[test]
+    fn scan_heal_report_records_a_heal_failure_when_the_protected_copy_is_missing() {
+        use crate::manifest::ManifestEntry;
+        use std::io::Cursor;
+
+        // A verified manifest expecting content that does not match what's
+        // on disk, so `check` produces exactly one finding.
+        let mut manifest = IntegrityManifest {
+            version: 1,
+            entries: vec![ManifestEntry {
+                path: "bin/penguind".to_string(),
+                sha256: "a".repeat(64),
+                mode: 0o755,
+            }],
+            signature: String::new(),
+        };
+        let keypair =
+            minisign::KeyPair::generate_unencrypted_keypair().expect("generate minisign keypair");
+        let signature_box = minisign::sign(
+            Some(&keypair.pk),
+            &keypair.sk,
+            Cursor::new(manifest.canonical_bytes()),
+            None,
+            None,
+        )
+        .expect("sign fixture manifest");
+        manifest.signature = signature_box.into_string();
+        let pubkey = keypair.pk.to_box().expect("public key box").into_string();
+
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join("bin")).unwrap();
+        std::fs::write(root.path().join("bin/penguind"), b"on-disk contents").unwrap();
+        // Protected dir intentionally has no `bin/penguind` copy, so `heal`
+        // fails and the loop must report that failure rather than panic.
+        let protected = tempfile::tempdir().unwrap();
+
+        let events = scan_heal_report(
+            &FixedSource(manifest),
+            &pubkey,
+            root.path(),
+            protected.path(),
+            "node-1",
+            42,
+            &NoopConsoleSink,
+        );
+
+        assert_eq!(events.len(), 1);
+        assert!(
+            events[0].remediation.starts_with("heal failed"),
+            "expected a heal-failure remediation, got: {}",
+            events[0].remediation
+        );
+    }
 }

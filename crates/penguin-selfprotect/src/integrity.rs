@@ -221,4 +221,36 @@ mod tests {
         };
         assert!(heal(&finding_missing, empty_protected.path(), target.path()).is_err());
     }
+
+    #[test]
+    fn check_produces_no_finding_for_an_untampered_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.yaml");
+        std::fs::write(&path, b"untouched").unwrap();
+        let manifest = testfix::manifest_for(&[("config.yaml", &sha256_hex(b"untouched"))]);
+
+        let findings = check(&manifest, dir.path());
+        assert!(
+            findings.is_empty(),
+            "matching hash must not produce a finding: {findings:?}"
+        );
+    }
+
+    #[test]
+    fn classify_tamper_covers_unit_binary_and_config_paths() {
+        assert_eq!(
+            classify_tamper("etc/penguind.service"),
+            TamperKind::UnitModified
+        );
+        assert_eq!(classify_tamper("bin/penguind"), TamperKind::BinaryModified);
+        assert_eq!(classify_tamper("bin/penguin"), TamperKind::BinaryModified);
+        assert_eq!(
+            classify_tamper("bin/some-no-ext-tool"),
+            TamperKind::BinaryModified
+        );
+        assert_eq!(
+            classify_tamper("etc/config.yaml"),
+            TamperKind::ConfigModified
+        );
+    }
 }

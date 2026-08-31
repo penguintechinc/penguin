@@ -68,6 +68,7 @@ impl ProtectionState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::manifest::ManifestEntry;
 
     #[test]
     fn armed_only_when_enrolled_and_flag_on() {
@@ -75,5 +76,37 @@ mod tests {
         assert!(!is_armed(false, true)); // unenrolled/dev agent stays unarmed
         assert!(!is_armed(true, false)); // flag off
         assert!(!is_armed(false, false)); // both false
+    }
+
+    #[test]
+    fn protection_state_exposes_the_fields_it_was_built_with() {
+        let manifest = IntegrityManifest {
+            version: 1,
+            entries: vec![ManifestEntry {
+                path: "bin/penguind".to_string(),
+                sha256: "a".repeat(64),
+                mode: 0o755,
+            }],
+            signature: "sig".to_string(),
+        };
+        let state = ProtectionState::new(
+            "node-1".to_string(),
+            Some("phc-hash".to_string()),
+            manifest.clone(),
+        );
+        assert_eq!(state.node_id(), "node-1");
+        assert_eq!(state.secret_phc(), Some("phc-hash"));
+        assert_eq!(state.manifest(), &manifest);
+    }
+
+    #[test]
+    fn protection_state_secret_phc_is_none_when_not_provisioned() {
+        let manifest = IntegrityManifest {
+            version: 1,
+            entries: vec![],
+            signature: String::new(),
+        };
+        let state = ProtectionState::new("node-2".to_string(), None, manifest);
+        assert_eq!(state.secret_phc(), None);
     }
 }

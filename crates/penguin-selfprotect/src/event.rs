@@ -61,6 +61,31 @@ pub enum TamperEventKind {
     UnauthorizedUninstall,
 }
 
+#[cfg(test)]
+mod tamper_kind_conversion_tests {
+    use super::*;
+
+    #[test]
+    fn every_tamper_kind_maps_to_its_identically_named_event_kind() {
+        assert_eq!(
+            TamperEventKind::from(TamperKind::BinaryModified),
+            TamperEventKind::BinaryModified
+        );
+        assert_eq!(
+            TamperEventKind::from(TamperKind::UnitModified),
+            TamperEventKind::UnitModified
+        );
+        assert_eq!(
+            TamperEventKind::from(TamperKind::ConfigModified),
+            TamperEventKind::ConfigModified
+        );
+        assert_eq!(
+            TamperEventKind::from(TamperKind::FileMissing),
+            TamperEventKind::FileMissing
+        );
+    }
+}
+
 impl From<TamperKind> for TamperEventKind {
     /// The only four [`TamperKind`] variants map onto their identically
     /// named [`TamperEventKind`] counterpart — see that enum's doc for why

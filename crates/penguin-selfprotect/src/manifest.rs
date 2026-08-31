@@ -162,4 +162,34 @@ mod tests {
             Err(SelfProtectError::Signature)
         ));
     }
+
+    #[test]
+    fn local_file_source_loads_and_parses_a_manifest_from_disk() {
+        let (_pubkey, manifest) = testfix::signed_manifest();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("manifest.json");
+        std::fs::write(&path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+
+        let source = LocalFileSource { path };
+        let loaded = source.load().unwrap();
+        assert_eq!(loaded, manifest);
+    }
+
+    #[test]
+    fn local_file_source_reports_io_error_for_missing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = LocalFileSource {
+            path: dir.path().join("missing-manifest.json"),
+        };
+        assert!(matches!(source.load(), Err(SelfProtectError::Io(_))));
+    }
+
+    #[test]
+    fn local_file_source_reports_parse_error_for_invalid_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bad-manifest.json");
+        std::fs::write(&path, b"not json").unwrap();
+        let source = LocalFileSource { path };
+        assert!(matches!(source.load(), Err(SelfProtectError::Parse(_))));
+    }
 }
