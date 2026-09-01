@@ -12,8 +12,11 @@ const SUBSYSTEM: &str = "skauswatch";
 
 /// SkausWatch's Prometheus collectors.
 pub struct SkausWatchMetrics {
-    /// Whether this agent has completed enrollment (1=yes, 0=no).
-    pub enrolled: Gauge,
+    /// Whether this agent has completed at least one successful
+    /// `register()` check-in with the Manager since this process started
+    /// (1=yes, 0=no). The agent's identity itself is always provisioned
+    /// (never earned via this call) — this only tracks check-in state.
+    pub checked_in: Gauge,
     /// Total number of heartbeats successfully acknowledged by the Manager.
     pub heartbeats_total: Counter,
     /// Total number of [`skauswatch_client::EndpointEvent`]s successfully
@@ -28,11 +31,11 @@ pub struct SkausWatchMetrics {
 impl SkausWatchMetrics {
     /// Builds all four collectors and registers each with `registerer`.
     pub fn register(registerer: &dyn Metrics) -> Result<SkausWatchMetrics, MetricsError> {
-        let enrolled = new_gauge(
-            "enrolled",
-            "Whether this agent has completed enrollment (1=yes, 0=no)",
+        let checked_in = new_gauge(
+            "checked_in",
+            "Whether this agent has completed at least one successful check-in (1=yes, 0=no)",
         )?;
-        registerer.register(Box::new(enrolled.clone()))?;
+        registerer.register(Box::new(checked_in.clone()))?;
 
         let heartbeats_total = new_counter(
             "heartbeats_total",
@@ -53,7 +56,7 @@ impl SkausWatchMetrics {
         registerer.register(Box::new(errors_total.clone()))?;
 
         Ok(SkausWatchMetrics {
-            enrolled,
+            checked_in,
             heartbeats_total,
             events_reported_total,
             errors_total,
@@ -113,7 +116,7 @@ mod tests {
 
         let names = reg.names.lock().unwrap().clone();
         let expected = [
-            "penguin_module_skauswatch_enrolled",
+            "penguin_module_skauswatch_checked_in",
             "penguin_module_skauswatch_heartbeats_total",
             "penguin_module_skauswatch_events_reported_total",
             "penguin_module_skauswatch_errors_total",

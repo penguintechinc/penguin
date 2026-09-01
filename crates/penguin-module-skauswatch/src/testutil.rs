@@ -184,28 +184,41 @@ impl HostServices for FakeHost {
 }
 
 /// Builds a ready-to-`init` [`HostServices`] double: a minimal valid
-/// [`crate::config::ModuleConfig`] (`base_url`, `enrollment_token`,
-/// `heartbeat_interval` in seconds), wrapped in an `Arc<dyn HostServices>` so
-/// it can be passed directly to [`penguin_sdk::Module::init`].
-pub fn fake_host(
+/// [`crate::config::ModuleConfig`] document (`base_url`, `agent_id`,
+/// `heartbeat_interval` in seconds) plus the provisioned `api_key`
+/// credential seeded into the fake host's secret store under
+/// [`crate::module::API_KEY_SECRET_KEY`] — mirrors how the real daemon's
+/// secret store is expected to already hold this credential before the
+/// module's `init` ever runs. Wrapped in an `Arc<dyn HostServices>` so it
+/// can be passed directly to [`penguin_sdk::Module::init`].
+///
+/// Async because seeding the secret store goes through the async
+/// [`SecretStore`] trait — every call site is already inside a
+/// `#[tokio::test]`.
+pub async fn fake_host(
     base_url: &str,
-    enrollment_token: &str,
+    agent_id: &str,
+    api_key: &str,
     heartbeat_interval_secs: u64,
 ) -> Arc<dyn HostServices> {
     let mut host = FakeHost::new(std::env::temp_dir());
     host.config = serde_json::to_vec(&serde_json::json!({
         "base_url": base_url,
-        "enrollment_token": enrollment_token,
+        "agent_id": agent_id,
         "heartbeat_interval": heartbeat_interval_secs,
     }))
     .expect("config serializes");
+    host.secrets
+        .set(crate::module::API_KEY_SECRET_KEY, api_key.as_bytes())
+        .await
+        .expect("seed api_key secret");
     Arc::new(host)
 }
 
 /// Builds a default ready-to-`init` [`HostServices`] double with canned
 /// placeholder values (useful for tests that don't need custom config).
-pub fn fake_host_default() -> Arc<dyn HostServices> {
-    fake_host("http://localhost:8080", "test-token", 10)
+pub async fn fake_host_default() -> Arc<dyn HostServices> {
+    fake_host("http://localhost:8080", "test-agent", "test-api-key", 10).await
 }
 
 /// One canned HTTP response [`MockManager`] hands back for a route.

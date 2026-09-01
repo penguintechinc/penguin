@@ -1,5 +1,5 @@
-//! The SkausWatch `penguin_sdk::Module` implementation: lifecycle glue,
-//! agent enrollment, and the background heartbeat/report loop.
+//! The SkausWatch `penguin_sdk::Module` implementation: lifecycle glue and
+//! the background check-in/heartbeat/report loop.
 //!
 //! Mirrors `penguin-module-tobogganing::module`'s pattern: an `Arc<Inner>`
 //! shared into a background task via `Clone`, a `CancellationToken`
@@ -8,6 +8,15 @@
 //! the Go bug this avoids), and a cached `last_health` report so `health()`
 //! never reads a silent "healthy by default" value before any real check has
 //! run.
+//!
+//! # Identity is provisioned, not obtained
+//!
+//! Unlike a prior version of this module, the agent's `agent_id` (config)
+//! and `api_key` (secret store) are both provisioned out-of-band before
+//! `init` ever runs — the real Manager's `register()` handler is a
+//! check-in/upsert against a known agent, not an identity-issuing call (see
+//! `skauswatch_client::ClientConfig`'s doc). There is nothing to "acquire"
+//! and nothing server-issued to persist.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -21,17 +30,15 @@ use penguin_sdk::{
     CommandResult, CommandSpec, HealthLevel, HealthReport, HostServices, Module, ModuleError,
     ModuleInfo, ModuleState, SecretError, Status,
 };
-use skauswatch_client::{
-    AgentIdentity, ClientConfig, EndpointEvent, HeartbeatBody, SkausWatchClient,
-};
+use skauswatch_client::{ClientConfig, EndpointEvent, SkausWatchClient};
 
 use crate::config::ModuleConfig;
 use crate::metrics::SkausWatchMetrics;
 
-/// Secret-store key the enrolled [`AgentIdentity`] is persisted under, once
-/// obtained — read back on every subsequent run so an agent registers with
-/// the Manager at most once.
-const AGENT_IDENTITY_SECRET_KEY: &str = "agent_identity";
+/// Secret-store key the provisioned `api_key` credential is read from in
+/// `init` — never written by this module; the Manager never issues one over
+/// the wire (see [`SkausWatchModule::init`]'s doc).
+pub(crate) const API_KEY_SECRET_KEY: &str = "api_key";
 
 /// Health degrades once the last successful heartbeat is older than this
 /// multiple of the configured heartbeat interval — mirrors tobogganing's
@@ -46,14 +53,22 @@ pub(crate) struct Inner {
     host: OnceLock<Arc<dyn HostServices>>,
     client: OnceLock<Arc<SkausWatchClient>>,
     metrics: OnceLock<SkausWatchMetrics>,
+    /// This agent's provisioned identity, set once in `init` — read on
+    /// every `status()` call. A `OnceLock` (not a `Mutex`) because, unlike
+    /// the old server-issued identity, this never changes for the life of
+    /// the process.
+    agent_id: OnceLock<String>,
     running: AtomicBool,
     /// Recreated fresh on every `start()` — see `start()`'s doc.
     cancel: StdMutex<Option<CancellationToken>>,
     heartbeat_interval_ms: AtomicU64,
-    /// Cached once enrollment succeeds (either loaded from the secret store
-    /// or freshly registered) — see `ensure_identity`. Read every tick so a
-    /// steady-state loop never re-hits the secret store once warm.
-    pub(crate) identity: StdMutex<Option<AgentIdentity>>,
+    /// Whether `register()` has succeeded at least once since this process
+    /// started — see `ensure_checked_in`. `false` never blocks the
+    /// heartbeat/report calls; a Manager that already has this agent's
+    /// `endpoint_agents` row (the assumed deployment model) accepts both
+    /// even before the first successful check-in. `pub(crate)` so
+    /// `crate::commands::cmd_enroll` can force a re-check-in.
+    pub(crate) checked_in: AtomicBool,
     /// Set on every heartbeat the Manager acknowledges — the age of this is
     /// what `update_health_probe` grades against `DEGRADED_MULTIPLIER`.
     last_heartbeat_ok: StdMutex<Option<SystemTime>>,
@@ -76,12 +91,13 @@ impl Inner {
             host: OnceLock::new(),
             client: OnceLock::new(),
             metrics: OnceLock::new(),
+            agent_id: OnceLock::new(),
             running: AtomicBool::new(false),
             cancel: StdMutex::new(None),
             heartbeat_interval_ms: AtomicU64::new(
                 ModuleConfig::default().heartbeat_interval * 1000,
             ),
-            identity: StdMutex::new(None),
+            checked_in: AtomicBool::new(false),
             last_heartbeat_ok: StdMutex::new(None),
             last_health: StdMutex::new(None),
             pending_events: StdMutex::new(Vec::new()),
@@ -150,11 +166,20 @@ impl Module for SkausWatchModule {
         }
     }
 
-    /// Resolves config (defaults, then the host's raw YAML), builds the
-    /// [`SkausWatchClient`], and registers all four metrics. Never begins
-    /// background work or touches the network — that is [`Module::start`]'s
-    /// job (specifically the loop it spawns; enrollment happens on that
-    /// loop's first tick, not here — see `start`'s doc).
+    /// Resolves config (defaults, then the host's raw YAML), reads the
+    /// provisioned `api_key` credential from the host secret store — never
+    /// from the config document, matching every other built-in module's
+    /// rule for its own credential — builds the [`SkausWatchClient`], and
+    /// registers all four metrics. Never begins background work or touches
+    /// the network — that is [`Module::start`]'s job.
+    ///
+    /// `base_url` and `agent_id` are required config fields; `api_key`
+    /// must already be present in the secret store under
+    /// [`API_KEY_SECRET_KEY`] (the daemon/operator provisions it before
+    /// this module ever starts). All three fail `init` outright if
+    /// missing — unlike a license/feature-flag check, there is no
+    /// graceful-degradation path for a foundational credential this
+    /// module cannot function without.
     async fn init(&self, host: Arc<dyn HostServices>) -> Result<(), ModuleError> {
         let logger = host.logger();
 
@@ -168,14 +193,36 @@ impl Module for SkausWatchModule {
         if cfg.base_url.is_empty() {
             return Err(ModuleError::new("base_url is required"));
         }
-        if cfg.enrollment_token.is_empty() {
-            return Err(ModuleError::new("enrollment_token is required"));
+        if cfg.agent_id.is_empty() {
+            return Err(ModuleError::new("agent_id is required"));
+        }
+
+        let api_key = match host.secrets().get(API_KEY_SECRET_KEY).await {
+            Ok(bytes) => String::from_utf8(bytes).map_err(|err| {
+                ModuleError::new(format!("api_key secret is not valid UTF-8: {err}"))
+            })?,
+            Err(SecretError::NotFound) => {
+                return Err(ModuleError::new(
+                    "api_key secret is required (provision it via the host secret store before starting this module)",
+                ));
+            }
+            Err(err) => {
+                return Err(ModuleError::new(format!(
+                    "failed to read api_key secret: {err}"
+                )));
+            }
+        };
+        if api_key.is_empty() {
+            return Err(ModuleError::new(
+                "api_key secret is required (provision it via the host secret store before starting this module)",
+            ));
         }
 
         logger.info(
             "skauswatch config loaded",
             &[
                 ("base_url", cfg.base_url.as_str()),
+                ("agent_id", cfg.agent_id.as_str()),
                 ("heartbeat_interval", &cfg.heartbeat_interval.to_string()),
             ],
         );
@@ -185,7 +232,12 @@ impl Module for SkausWatchModule {
             .heartbeat_interval_ms
             .store(interval.as_millis() as u64, Ordering::SeqCst);
 
-        let client_cfg = ClientConfig::new(cfg.base_url.clone(), cfg.enrollment_token.clone());
+        let client_cfg = ClientConfig::new(
+            cfg.base_url.clone(),
+            cfg.agent_id.clone(),
+            api_key,
+            cfg.enrollment_token.clone(),
+        );
         let client = Arc::new(SkausWatchClient::new(client_cfg).map_err(|err| {
             ModuleError::new(format!("failed to build skauswatch client: {err}"))
         })?);
@@ -201,20 +253,25 @@ impl Module for SkausWatchModule {
         let _ = self.inner.host.set(host);
         let _ = self.inner.client.set(client);
         let _ = self.inner.metrics.set(metrics);
+        let _ = self.inner.agent_id.set(cfg.agent_id);
 
         Ok(())
     }
 
-    /// Starts the background heartbeat/report loop and returns promptly.
+    /// Starts the background check-in/heartbeat/report loop and returns
+    /// promptly.
     ///
-    /// **Enrollment happens inside the loop, not here.** The loop's first
-    /// tick is responsible for ensuring an [`AgentIdentity`] exists (loading
-    /// one already persisted, or registering a fresh one — see
-    /// `ensure_identity`), retrying on the next tick if that fails. This
+    /// **Check-in happens inside the loop, not here.** The loop's first
+    /// tick attempts a best-effort `register()` check-in (see
+    /// `ensure_checked_in`), retrying on later ticks if it fails — this
     /// means `start()` never makes a network call and never blocks on an
-    /// unreachable Manager — matching tobogganing's `start()`, whose own doc
+    /// unreachable Manager, matching tobogganing's `start()`, whose own doc
     /// explains why a blocking `start` would wedge the whole daemon (the
-    /// supervisor holds its lock across the call).
+    /// supervisor holds its lock across the call). Heartbeats and event
+    /// reports proceed on every tick regardless of check-in outcome — the
+    /// agent's identity is already provisioned, so a Manager that already
+    /// holds this agent's `endpoint_agents` row accepts both even before
+    /// the first successful check-in.
     ///
     /// The `CancellationToken` is recreated fresh on every call (not reused
     /// from a prior `start`), so a `start` following a `stop` is never
@@ -260,7 +317,8 @@ impl Module for SkausWatchModule {
         Ok(())
     }
 
-    /// Reports the module's running state plus enrollment detail.
+    /// Reports the module's running state plus this agent's provisioned
+    /// identity and check-in status.
     async fn status(&self) -> Result<Status, ModuleError> {
         let state = if self.is_running() {
             ModuleState::Running
@@ -268,12 +326,14 @@ impl Module for SkausWatchModule {
             ModuleState::Disabled
         };
 
-        let identity = self.inner.identity.lock().unwrap().clone();
         let mut detail = HashMap::new();
-        detail.insert("enrolled".to_string(), identity.is_some().to_string());
-        if let Some(identity) = identity {
-            detail.insert("agent_id".to_string(), identity.agent_id);
+        if let Some(agent_id) = self.inner.agent_id.get() {
+            detail.insert("agent_id".to_string(), agent_id.clone());
         }
+        detail.insert(
+            "checked_in".to_string(),
+            self.inner.checked_in.load(Ordering::SeqCst).to_string(),
+        );
 
         Ok(Status { state, detail })
     }
@@ -318,87 +378,78 @@ impl Module for SkausWatchModule {
     }
 }
 
-/// Ensures a persisted [`AgentIdentity`] exists: returns the cached one if
-/// this process has already resolved it this run, else tries the host's
-/// secret store, else registers a fresh one against the Manager and
-/// persists it. Called from every heartbeat tick (never from `start()`
-/// itself — see that method's doc), so a Manager that's unreachable at
-/// startup is retried automatically without ever blocking `start()`.
-async fn ensure_identity(module: &SkausWatchModule) -> Result<AgentIdentity, ModuleError> {
-    if let Some(identity) = module.inner.identity.lock().unwrap().clone() {
-        return Ok(identity);
+/// Best-effort check-in: calls `register()` once and latches
+/// [`Inner::checked_in`] on success. A no-op once already checked in this
+/// run. Called from every heartbeat tick (never from `start()` itself — see
+/// that method's doc), so a Manager that's unreachable at startup is
+/// retried automatically without ever blocking `start()`. Never panics and
+/// never aborts the loop on failure — only logs and bumps `errors_total`.
+async fn ensure_checked_in(module: &SkausWatchModule) {
+    if module.inner.checked_in.load(Ordering::SeqCst) {
+        return;
     }
 
-    match module.host().secrets().get(AGENT_IDENTITY_SECRET_KEY).await {
-        Ok(bytes) => {
-            let identity: AgentIdentity = serde_json::from_slice(&bytes).map_err(|err| {
-                ModuleError::new(format!("failed to parse stored agent identity: {err}"))
-            })?;
-            cache_identity(module, identity.clone());
-            return Ok(identity);
+    match module.client().register().await {
+        Ok(response) => {
+            module.host().logger().info(
+                "agent checked in",
+                &[
+                    ("agent_id", response.agent_id.as_str()),
+                    ("status", response.status.as_str()),
+                ],
+            );
+            module.inner.checked_in.store(true, Ordering::SeqCst);
+            module.metrics().checked_in.set(1.0);
         }
-        Err(SecretError::NotFound) => {}
         Err(err) => {
-            return Err(ModuleError::new(format!(
-                "failed to read stored agent identity: {err}"
-            )));
-        }
-    }
-
-    let identity = module
-        .client()
-        .register()
-        .await
-        .map_err(|err| ModuleError::new(format!("registration failed: {err}")))?;
-
-    let payload = serde_json::to_vec(&identity)
-        .map_err(|err| ModuleError::new(format!("failed to serialize agent identity: {err}")))?;
-    module
-        .host()
-        .secrets()
-        .set(AGENT_IDENTITY_SECRET_KEY, &payload)
-        .await
-        .map_err(|err| ModuleError::new(format!("failed to persist agent identity: {err}")))?;
-
-    module.host().logger().info(
-        "agent enrolled",
-        &[("agent_id", identity.agent_id.as_str())],
-    );
-    cache_identity(module, identity.clone());
-
-    Ok(identity)
-}
-
-fn cache_identity(module: &SkausWatchModule, identity: AgentIdentity) {
-    *module.inner.identity.lock().unwrap() = Some(identity);
-    module.metrics().enrolled.set(1.0);
-}
-
-/// One heartbeat/report cycle: ensures enrollment, sends a heartbeat, and
-/// drains+reports any queued events. Every fallible step logs, bumps
-/// `errors_total`, and returns — this function never panics and never
-/// aborts the loop on a transient error, matching the brief's requirement
-/// that a failed Manager call is retried on the next tick, not fatal.
-async fn run_heartbeat_tick(module: &SkausWatchModule) {
-    let identity = match ensure_identity(module).await {
-        Ok(identity) => identity,
-        Err(err) => {
-            module.host().logger().error(
-                "failed to obtain agent identity",
+            module.host().logger().warn(
+                "check-in failed, will retry next tick",
                 &[("error", &err.to_string())],
             );
             module.metrics().errors_total.inc();
-            update_health_probe(module);
-            return;
         }
-    };
+    }
+}
 
-    let body = HeartbeatBody {
-        healthy: true,
-        module_version: env!("CARGO_PKG_VERSION").to_string(),
-    };
+/// Maps this module's locally-computed [`HealthLevel`] to the heartbeat
+/// `status` string the Manager's `AGENT_STATUSES` accepts (`"active"`,
+/// `"inactive"`, `"disconnected"` — `services/manager/src/routes/endpoint.rs`
+/// ~line 31). A straight 1:1 mapping of the three grades:
+///
+/// - [`HealthLevel::Healthy`] (fully operational, a fresh heartbeat has
+///   landed) reports `"active"`.
+/// - [`HealthLevel::Degraded`] (operational, but the last successful
+///   heartbeat is aging past the degraded threshold) reports `"inactive"`.
+/// - [`HealthLevel::Unhealthy`] (no successful heartbeat has ever landed
+///   this run) reports `"disconnected"` — the most conservative signal
+///   available in the Manager's three-value enum.
+///
+/// This is a real, locally-computed grade sent every tick — never a
+/// hardcoded `"active"`.
+fn health_to_status(level: HealthLevel) -> &'static str {
+    match level {
+        HealthLevel::Healthy => "active",
+        HealthLevel::Degraded => "inactive",
+        HealthLevel::Unhealthy => "disconnected",
+    }
+}
 
-    match module.client().heartbeat(&identity, &body).await {
+/// One check-in/heartbeat/report cycle: best-effort check-in, a heartbeat
+/// carrying this module's real computed health as its `status`, and
+/// draining+reporting any queued events. Every fallible step logs, bumps
+/// `errors_total`, and continues — this function never panics and never
+/// aborts the loop on a transient error, so a failed Manager call is
+/// retried on the next tick, never fatal.
+async fn run_heartbeat_tick(module: &SkausWatchModule) {
+    ensure_checked_in(module).await;
+
+    // Read the health grade computed as of the end of the previous tick (or
+    // `start()`'s synchronous probe, for the very first tick) — this is
+    // what actually gets sent as this heartbeat's `status`, not a hardcoded
+    // value.
+    let status = health_to_status(module.health().await.level);
+
+    match module.client().heartbeat(status).await {
         Ok(()) => {
             *module.inner.last_heartbeat_ok.lock().unwrap() = Some(SystemTime::now());
             module.metrics().heartbeats_total.inc();
@@ -412,7 +463,7 @@ async fn run_heartbeat_tick(module: &SkausWatchModule) {
         }
     }
 
-    report_pending_events(module, &identity).await;
+    report_pending_events(module).await;
     update_health_probe(module);
 }
 
@@ -421,7 +472,7 @@ async fn run_heartbeat_tick(module: &SkausWatchModule) {
 /// pushed back onto the front of the queue (ahead of anything queued while
 /// the report was in flight) so a transient failure never silently drops an
 /// observed event — it's retried on the next tick instead.
-async fn report_pending_events(module: &SkausWatchModule, identity: &AgentIdentity) {
+async fn report_pending_events(module: &SkausWatchModule) {
     let events = {
         let mut pending = module.inner.pending_events.lock().unwrap();
         std::mem::take(&mut *pending)
@@ -431,7 +482,7 @@ async fn report_pending_events(module: &SkausWatchModule, identity: &AgentIdenti
     }
 
     let event_count = events.len();
-    if let Err(err) = module.client().report_events(identity, &events).await {
+    if let Err(err) = module.client().report_events(&events).await {
         module
             .host()
             .logger()
@@ -474,17 +525,12 @@ async fn heartbeat_loop(module: SkausWatchModule, cancel: CancellationToken) {
 }
 
 /// Grades health from local cached state only (no network I/O — safe to
-/// call synchronously from `start()` as well as from every loop tick):
-/// unenrolled is `Unhealthy`, enrolled-but-never-heartbeat is `Unhealthy`,
-/// a heartbeat older than `DEGRADED_MULTIPLIER` intervals is `Degraded`,
-/// otherwise `Healthy`.
+/// call synchronously from `start()` as well as from every loop tick): no
+/// heartbeat has ever succeeded is `Unhealthy`, a heartbeat older than
+/// `DEGRADED_MULTIPLIER` intervals is `Degraded`, otherwise `Healthy`. This
+/// agent's identity is always provisioned (never "unenrolled"), so unlike a
+/// prior version of this probe there is no separate enrollment gate.
 fn update_health_probe(module: &SkausWatchModule) {
-    let enrolled = module.inner.identity.lock().unwrap().is_some();
-    if !enrolled {
-        set_health(module, HealthLevel::Unhealthy, "agent not yet enrolled");
-        return;
-    }
-
     let last = *module.inner.last_heartbeat_ok.lock().unwrap();
     let Some(last) = last else {
         set_health(
@@ -550,22 +596,23 @@ mod tests {
     use std::time::Duration;
 
     use penguin_sdk::SecretStore;
+    use skauswatch_client::Severity;
 
     use crate::testutil::{self, FakeHost, MockManager, MockResponse};
 
     use super::*;
 
-    fn valid_config_bytes(base_url: &str, enrollment_token: &str, interval_secs: u64) -> Vec<u8> {
+    fn valid_config_bytes(base_url: &str, agent_id: &str, interval_secs: u64) -> Vec<u8> {
         serde_json::to_vec(&serde_json::json!({
             "base_url": base_url,
-            "enrollment_token": enrollment_token,
+            "agent_id": agent_id,
             "heartbeat_interval": interval_secs,
         }))
         .unwrap()
     }
 
     async fn init_module() -> SkausWatchModule {
-        let host = testutil::fake_host("http://127.0.0.1:1", "enroll-tok", 60);
+        let host = testutil::fake_host("http://127.0.0.1:1", "agent-init", "test-key", 60).await;
         let module = SkausWatchModule::new();
         module.init(host).await.expect("init succeeds");
         module
@@ -581,14 +628,14 @@ mod tests {
         panic!("condition not met within timeout");
     }
 
-    async fn seed_register_route(manager: &MockManager, agent_id: &str, api_key: &str) {
+    async fn seed_register_route(manager: &MockManager, agent_id: &str, status: &str) {
         manager
             .respond(
                 "POST",
                 "/api/v1/endpoint/register",
                 MockResponse::json(
                     200,
-                    format!(r#"{{"agent_id":"{agent_id}","api_key":"{api_key}"}}"#),
+                    format!(r#"{{"message":"ok","agent_id":"{agent_id}","status":"{status}"}}"#),
                 ),
             )
             .await;
@@ -599,23 +646,37 @@ mod tests {
             .respond(
                 "POST",
                 "/api/v1/endpoint/heartbeat",
-                MockResponse::empty(200),
+                MockResponse::json(
+                    200,
+                    r#"{"status":"active","agent_id":"a","timestamp":"2026-01-01T00:00:00Z"}"#,
+                ),
             )
             .await;
     }
 
     async fn seed_events_route(manager: &MockManager) {
         manager
-            .respond("POST", "/api/v1/endpoint/events", MockResponse::empty(200))
+            .respond(
+                "POST",
+                "/api/v1/endpoint/events",
+                MockResponse::json(
+                    200,
+                    r#"{"status":"accepted","events_received":1,"events_stored":1,"errors":[]}"#,
+                ),
+            )
             .await;
     }
 
     /// Builds and initializes a module wired to `manager_url` with a short,
     /// test-overridden heartbeat interval.
-    async fn init_module_with_manager(manager_url: &str) -> SkausWatchModule {
+    async fn init_module_with_manager(manager_url: &str, agent_id: &str) -> SkausWatchModule {
         let dir = tempfile::tempdir().unwrap();
         let mut host = FakeHost::new(dir.path().to_path_buf());
-        host.config = valid_config_bytes(manager_url, "enroll-tok", 60);
+        host.config = valid_config_bytes(manager_url, agent_id, 60);
+        host.secrets
+            .set(API_KEY_SECRET_KEY, b"test-key")
+            .await
+            .unwrap();
         let module = SkausWatchModule::new();
         module.init(Arc::new(host)).await.expect("init succeeds");
         module.set_heartbeat_interval_for_test(Duration::from_millis(15));
@@ -642,20 +703,34 @@ mod tests {
     async fn init_requires_base_url() {
         let dir = tempfile::tempdir().unwrap();
         let mut host = FakeHost::new(dir.path().to_path_buf());
-        host.config = serde_json::to_vec(&serde_json::json!({"enrollment_token": "tok"})).unwrap();
+        host.config = serde_json::to_vec(&serde_json::json!({"agent_id": "a"})).unwrap();
         let module = SkausWatchModule::new();
         let err = module.init(Arc::new(host)).await.unwrap_err();
         assert!(err.to_string().contains("base_url"));
     }
 
     #[tokio::test]
-    async fn init_requires_enrollment_token() {
+    async fn init_requires_agent_id() {
         let dir = tempfile::tempdir().unwrap();
         let mut host = FakeHost::new(dir.path().to_path_buf());
         host.config = serde_json::to_vec(&serde_json::json!({"base_url": "http://x"})).unwrap();
         let module = SkausWatchModule::new();
         let err = module.init(Arc::new(host)).await.unwrap_err();
-        assert!(err.to_string().contains("enrollment_token"));
+        assert!(err.to_string().contains("agent_id"));
+    }
+
+    /// The `api_key` credential must come from the secret store, not the
+    /// config document — `init` fails outright when it's absent, since
+    /// unlike a license/feature-flag check there is no graceful fallback
+    /// for a foundational credential.
+    #[tokio::test]
+    async fn init_requires_api_key_secret() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut host = FakeHost::new(dir.path().to_path_buf());
+        host.config = valid_config_bytes("http://127.0.0.1:1", "agent-1", 60);
+        let module = SkausWatchModule::new();
+        let err = module.init(Arc::new(host)).await.unwrap_err();
+        assert!(err.to_string().contains("api_key"));
     }
 
     #[tokio::test]
@@ -676,7 +751,8 @@ mod tests {
     async fn init_surfaces_a_metrics_registration_failure() {
         let dir = tempfile::tempdir().unwrap();
         let mut host = FakeHost::new(dir.path().to_path_buf());
-        host.config = valid_config_bytes("http://127.0.0.1:1", "tok", 60);
+        host.config = valid_config_bytes("http://127.0.0.1:1", "agent-1", 60);
+        host.secrets.set(API_KEY_SECRET_KEY, b"k").await.unwrap();
         let host: Arc<dyn HostServices> = Arc::new(host);
 
         let first = SkausWatchModule::new();
@@ -687,13 +763,13 @@ mod tests {
         assert!(err.to_string().contains("register metrics"));
     }
 
-    /// TDD RED for Task 5: proves the lifecycle is clean (start returns
-    /// promptly with no live endpoint required — enrollment happens inside
-    /// the loop, not on the `start()` path) and `stop()` is idempotent.
+    /// Proves the lifecycle is clean (start returns promptly with no live
+    /// endpoint required — check-in happens inside the loop, not on the
+    /// `start()` path) and `stop()` is idempotent.
     #[tokio::test(start_paused = true)]
     async fn start_then_stop_is_clean_and_idempotent() {
         let module = SkausWatchModule::new();
-        let host = testutil::fake_host("http://127.0.0.1:1", "enroll-tok", 30);
+        let host = testutil::fake_host("http://127.0.0.1:1", "agent-1", "k", 30).await;
         module.init(host).await.expect("init");
         module.start().await.expect("start returns promptly");
         assert!(module.is_running());
@@ -735,10 +811,10 @@ mod tests {
     #[tokio::test]
     async fn start_stop_start_leaves_the_heartbeat_loop_alive() {
         let manager = MockManager::start().await;
-        seed_register_route(&manager, "agent-1", "key-1").await;
+        seed_register_route(&manager, "agent-1", "active").await;
         seed_heartbeat_route(&manager).await;
 
-        let module = init_module_with_manager(&manager.base_url).await;
+        let module = init_module_with_manager(&manager.base_url, "agent-1").await;
 
         module.start().await.unwrap();
         wait_for(|| module.heartbeat_tick_count() > 0).await;
@@ -753,27 +829,31 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn status_reports_not_enrolled_before_any_tick() {
+    async fn status_reports_not_checked_in_before_any_tick() {
         let module = init_module().await;
         let status = module.status().await.unwrap();
         assert_eq!(
-            status.detail.get("enrolled").map(String::as_str),
+            status.detail.get("checked_in").map(String::as_str),
             Some("false")
+        );
+        assert_eq!(
+            status.detail.get("agent_id").map(String::as_str),
+            Some("agent-init")
         );
     }
 
-    /// End-to-end: the loop registers (no persisted identity yet), persists
-    /// the resulting `AgentIdentity` to the host's secret store, and sends a
-    /// heartbeat using it — proving `ensure_identity`'s register-then-persist
-    /// path and `run_heartbeat_tick`'s heartbeat call both work against a
-    /// real (mocked) Manager.
+    /// End-to-end: the loop checks in (no prior check-in this run), and
+    /// sends a heartbeat using the provisioned identity — proving
+    /// `ensure_checked_in`'s register path and `run_heartbeat_tick`'s
+    /// heartbeat call both work against a real (mocked) Manager. No
+    /// identity is persisted anywhere: the Manager never issues one.
     #[tokio::test]
-    async fn heartbeat_loop_registers_persists_and_heartbeats() {
+    async fn heartbeat_loop_checks_in_and_heartbeats() {
         let manager = MockManager::start().await;
-        seed_register_route(&manager, "agent-42", "secret-key").await;
+        seed_register_route(&manager, "agent-42", "active").await;
         seed_heartbeat_route(&manager).await;
 
-        let module = init_module_with_manager(&manager.base_url).await;
+        let module = init_module_with_manager(&manager.base_url, "agent-42").await;
         module.start().await.expect("start succeeds");
 
         wait_for(|| module.metrics().heartbeats_total.get() >= 1.0).await;
@@ -784,23 +864,17 @@ mod tests {
                 .await,
             1
         );
-        assert_eq!(module.metrics().enrolled.get(), 1.0);
+        assert_eq!(module.metrics().checked_in.get(), 1.0);
 
         let status = module.status().await.unwrap();
         assert_eq!(
             status.detail.get("agent_id").map(String::as_str),
             Some("agent-42")
         );
-
-        let stored = module
-            .host()
-            .secrets()
-            .get(AGENT_IDENTITY_SECRET_KEY)
-            .await
-            .expect("identity persisted");
-        let identity: AgentIdentity = serde_json::from_slice(&stored).unwrap();
-        assert_eq!(identity.agent_id, "agent-42");
-        assert_eq!(identity.api_key, "secret-key");
+        assert_eq!(
+            status.detail.get("checked_in").map(String::as_str),
+            Some("true")
+        );
 
         let health = module.health().await;
         assert_eq!(health.level, HealthLevel::Healthy);
@@ -809,48 +883,37 @@ mod tests {
         manager.stop().await;
     }
 
-    /// A previously-persisted identity is reused without re-registering —
-    /// exercises `ensure_identity`'s secret-store-hit path directly, not
-    /// just the register-then-persist path the other loop tests cover.
+    /// Once check-in succeeds it must not repeat on every tick — proves
+    /// `ensure_checked_in`'s short-circuit, not just that it eventually
+    /// succeeds once.
     #[tokio::test]
-    async fn heartbeat_loop_reuses_a_persisted_identity_without_re_registering() {
+    async fn heartbeat_loop_only_checks_in_once_across_multiple_ticks() {
         let manager = MockManager::start().await;
+        seed_register_route(&manager, "agent-2", "active").await;
         seed_heartbeat_route(&manager).await;
 
-        let dir = tempfile::tempdir().unwrap();
-        let mut host = FakeHost::new(dir.path().to_path_buf());
-        host.config = valid_config_bytes(&manager.base_url, "enroll-tok", 60);
-        let identity_json =
-            serde_json::to_vec(&serde_json::json!({"agent_id": "existing-agent", "api_key": "k"}))
-                .unwrap();
-        host.secrets
-            .set(AGENT_IDENTITY_SECRET_KEY, &identity_json)
-            .await
-            .unwrap();
-
-        let module = SkausWatchModule::new();
-        module.init(Arc::new(host)).await.expect("init succeeds");
-        module.set_heartbeat_interval_for_test(Duration::from_millis(15));
+        let module = init_module_with_manager(&manager.base_url, "agent-2").await;
         module.start().await.expect("start succeeds");
 
-        wait_for(|| module.metrics().heartbeats_total.get() >= 1.0).await;
+        wait_for(|| module.metrics().heartbeats_total.get() >= 3.0).await;
 
         assert_eq!(
             manager
                 .request_count("POST", "/api/v1/endpoint/register")
                 .await,
-            0
+            1,
+            "register must only be called once check-in has succeeded"
         );
 
         module.stop().await.ok();
         manager.stop().await;
     }
 
-    /// A failed registration is retried on the next tick rather than
-    /// wedging the loop — proves the "never panic, never exit the loop"
-    /// requirement for the enrollment path specifically.
+    /// A failed check-in is retried on the next tick rather than wedging
+    /// the loop — proves the "never panic, never exit the loop"
+    /// requirement for the check-in path specifically.
     #[tokio::test]
-    async fn heartbeat_loop_retries_registration_after_a_failure() {
+    async fn heartbeat_loop_retries_check_in_after_a_failure() {
         let manager = MockManager::start().await;
         manager
             .respond(
@@ -863,17 +926,63 @@ mod tests {
             .respond(
                 "POST",
                 "/api/v1/endpoint/register",
-                MockResponse::json(200, r#"{"agent_id":"agent-7","api_key":"k7"}"#),
+                MockResponse::json(
+                    200,
+                    r#"{"message":"ok","agent_id":"agent-7","status":"active"}"#,
+                ),
             )
             .await;
         seed_heartbeat_route(&manager).await;
 
-        let module = init_module_with_manager(&manager.base_url).await;
+        let module = init_module_with_manager(&manager.base_url, "agent-7").await;
         module.start().await.expect("start succeeds");
 
         wait_for(|| module.metrics().errors_total.get() >= 1.0).await;
-        wait_for(|| module.metrics().enrolled.get() >= 1.0).await;
+        wait_for(|| module.metrics().checked_in.get() >= 1.0).await;
         wait_for(|| module.metrics().heartbeats_total.get() >= 1.0).await;
+
+        module.stop().await.ok();
+        manager.stop().await;
+    }
+
+    /// Regression for "Health -> status (real, not hardcoded)": the first
+    /// heartbeat of a fresh process fires before any heartbeat has ever
+    /// succeeded, so `update_health_probe` grades it `Unhealthy` and this
+    /// tick must send `"disconnected"` (see `health_to_status`'s doc); once
+    /// a heartbeat has landed the *next* tick must send `"active"`. A
+    /// hardcoded status string would send the same value both times.
+    #[tokio::test]
+    async fn heartbeat_status_reflects_computed_health_not_a_hardcoded_value() {
+        let manager = MockManager::start().await;
+        seed_register_route(&manager, "agent-55", "active").await;
+        seed_heartbeat_route(&manager).await;
+
+        let module = init_module_with_manager(&manager.base_url, "agent-55").await;
+        module.start().await.expect("start succeeds");
+
+        wait_for(|| module.metrics().heartbeats_total.get() >= 2.0).await;
+
+        let requests = manager.requests().await;
+        let heartbeats: Vec<_> = requests
+            .iter()
+            .filter(|req| {
+                req.method == "POST" && req.path.starts_with("/api/v1/endpoint/heartbeat")
+            })
+            .collect();
+        assert!(
+            heartbeats.len() >= 2,
+            "expected at least two recorded heartbeat requests"
+        );
+        assert!(
+            heartbeats[0].body.contains(r#""status":"disconnected""#),
+            "first heartbeat must report the pre-heartbeat Unhealthy grade; body: {}",
+            heartbeats[0].body
+        );
+        assert!(
+            heartbeats[1].body.contains(r#""status":"active""#),
+            "second heartbeat must report the Healthy grade set after the first succeeded; body: {}",
+            heartbeats[1].body
+        );
 
         module.stop().await.ok();
         manager.stop().await;
@@ -884,16 +993,24 @@ mod tests {
     #[tokio::test]
     async fn heartbeat_loop_drains_queued_events_via_report_events() {
         let manager = MockManager::start().await;
-        seed_register_route(&manager, "agent-9", "key-9").await;
+        seed_register_route(&manager, "agent-9", "active").await;
         seed_heartbeat_route(&manager).await;
         seed_events_route(&manager).await;
 
-        let module = init_module_with_manager(&manager.base_url).await;
+        let module = init_module_with_manager(&manager.base_url, "agent-9").await;
         module.queue_event_for_test(EndpointEvent {
-            kind: "module_fault".to_string(),
-            severity: "warning".to_string(),
-            detail: serde_json::json!({"module": "squawk"}),
-            ts_unix: 1_700_000_000,
+            agent_id: "agent-9".to_string(),
+            event_type: "module_fault".to_string(),
+            severity: Some(Severity::Medium),
+            process_name: None,
+            process_path: None,
+            process_hash: None,
+            parent_process: None,
+            command_line: None,
+            network_connections: None,
+            file_operations: None,
+            registry_operations: None,
+            details: Some(serde_json::json!({"module": "squawk"})),
         });
 
         module.start().await.expect("start succeeds");
@@ -915,7 +1032,7 @@ mod tests {
     #[tokio::test]
     async fn heartbeat_loop_requeues_events_after_a_failed_report() {
         let manager = MockManager::start().await;
-        seed_register_route(&manager, "agent-11", "key-11").await;
+        seed_register_route(&manager, "agent-11", "active").await;
         seed_heartbeat_route(&manager).await;
         manager
             .respond(
@@ -925,15 +1042,30 @@ mod tests {
             )
             .await;
         manager
-            .respond("POST", "/api/v1/endpoint/events", MockResponse::empty(200))
+            .respond(
+                "POST",
+                "/api/v1/endpoint/events",
+                MockResponse::json(
+                    200,
+                    r#"{"status":"accepted","events_received":1,"events_stored":1,"errors":[]}"#,
+                ),
+            )
             .await;
 
-        let module = init_module_with_manager(&manager.base_url).await;
+        let module = init_module_with_manager(&manager.base_url, "agent-11").await;
         module.queue_event_for_test(EndpointEvent {
-            kind: "module_fault".to_string(),
-            severity: "critical".to_string(),
-            detail: serde_json::Value::Null,
-            ts_unix: 1_700_000_001,
+            agent_id: "agent-11".to_string(),
+            event_type: "module_fault".to_string(),
+            severity: Some(Severity::Critical),
+            process_name: None,
+            process_path: None,
+            process_hash: None,
+            parent_process: None,
+            command_line: None,
+            network_connections: None,
+            file_operations: None,
+            registry_operations: None,
+            details: None,
         });
 
         module.start().await.expect("start succeeds");
@@ -959,12 +1091,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn start_makes_an_unenrolled_health_report_available_immediately() {
+    async fn start_makes_a_pre_heartbeat_health_report_available_immediately() {
         let module = init_module().await;
         module.start().await.expect("start succeeds");
         let health = module.health().await;
         assert_eq!(health.level, HealthLevel::Unhealthy);
-        assert!(health.message.contains("not yet enrolled"));
+        assert!(health.message.contains("no successful heartbeat"));
         module.stop().await.ok();
     }
 
@@ -974,10 +1106,6 @@ mod tests {
     async fn health_probe_reports_degraded_once_the_last_heartbeat_goes_stale() {
         let module = init_module().await;
         module.set_heartbeat_interval_for_test(Duration::from_millis(10));
-        *module.inner.identity.lock().unwrap() = Some(AgentIdentity {
-            agent_id: "a".to_string(),
-            api_key: "k".to_string(),
-        });
         let stale = SystemTime::now() - Duration::from_secs(1);
         *module.inner.last_heartbeat_ok.lock().unwrap() = Some(stale);
 
@@ -992,16 +1120,19 @@ mod tests {
     async fn health_probe_reports_healthy_with_a_fresh_heartbeat() {
         let module = init_module().await;
         module.set_heartbeat_interval_for_test(Duration::from_secs(60));
-        *module.inner.identity.lock().unwrap() = Some(AgentIdentity {
-            agent_id: "a".to_string(),
-            api_key: "k".to_string(),
-        });
         *module.inner.last_heartbeat_ok.lock().unwrap() = Some(SystemTime::now());
 
         update_health_probe(&module);
 
         let health = module.health().await;
         assert_eq!(health.level, HealthLevel::Healthy);
+    }
+
+    #[test]
+    fn health_to_status_maps_the_three_grades_to_agent_statuses() {
+        assert_eq!(health_to_status(HealthLevel::Healthy), "active");
+        assert_eq!(health_to_status(HealthLevel::Degraded), "inactive");
+        assert_eq!(health_to_status(HealthLevel::Unhealthy), "disconnected");
     }
 
     #[tokio::test]
@@ -1028,12 +1159,15 @@ mod tests {
     #[tokio::test]
     async fn dispatch_status_json_returns_structured_result() {
         let module = SkausWatchModule::new();
-        module.init(testutil::fake_host_default()).await.unwrap();
+        module
+            .init(testutil::fake_host_default().await)
+            .await
+            .unwrap();
         let flags = HashMap::from([("json".to_string(), "true".to_string())]);
         let out = module
             .dispatch(&["status".to_string()], &flags, &[])
             .await
             .expect("dispatch ok");
-        assert!(out.output.contains("enrolled") || out.output.contains("agent_id"));
+        assert!(out.output.contains("checked_in") || out.output.contains("agent_id"));
     }
 }

@@ -1,18 +1,24 @@
-//! The SkausWatch agent API client: registration against the Manager, plus
-//! the three HMAC-authenticated calls an enrolled agent makes on an ongoing
-//! basis (heartbeat, event reporting, config fetch).
+//! The SkausWatch agent API client: four calls against a provisioned agent
+//! identity (`agent_id` + `api_key`, supplied out-of-band via
+//! [`ClientConfig`]) — register (check-in), heartbeat, event reporting, and
+//! config fetch. Every call sends the same static `x-agent-id`/`x-api-key`
+//! header pair (see `crate::auth::agent_headers`); there is no per-request
+//! signature over the body.
 
 use std::time::Duration;
 
 use reqwest::Method;
 
-use crate::auth::HmacSigner;
+use crate::auth::agent_headers;
 use crate::config::ClientConfig;
 use crate::error::ClientError;
-use crate::model::{AgentConfig, AgentIdentity, EndpointEvent, HeartbeatBody, RegisterRequest};
+use crate::model::{
+    AgentConfig, EndpointEvent, HeartbeatRequest, HeartbeatResponse, RegisterRequest,
+    RegisterResponse, ReportEventsResponse,
+};
 use crate::tls_support::ensure_crypto_provider_installed;
 
-/// Path the Manager exposes for agent enrollment.
+/// Path the Manager exposes for agent check-in/register.
 const REGISTER_PATH: &str = "/api/v1/endpoint/register";
 
 /// Path the Manager exposes for agent heartbeats.
@@ -70,101 +76,105 @@ impl SkausWatchClient {
         Ok(SkausWatchClient { http, cfg })
     }
 
-    /// Enrolls this agent against the Manager: POSTs
-    /// `{ enrollment_token, hostname, os, arch, agent_version }` to
-    /// `/api/v1/endpoint/register` and returns the [`AgentIdentity`] the
-    /// Manager assigns. Any non-2xx response maps to
-    /// [`ClientError::Http`].
-    pub async fn register(&self) -> Result<AgentIdentity, ClientError> {
+    /// Checks this agent in with the Manager: POSTs the host's identifying
+    /// details to `/api/v1/endpoint/register`. This is a check-in/upsert
+    /// against the `agent_id` in [`ClientConfig`], not identity
+    /// acquisition — the Manager never returns an `api_key` from this call
+    /// (see [`crate::model::RegisterRequest`]'s doc). Includes
+    /// `enrollment_token` in the request body only when [`ClientConfig`]
+    /// carries one, which the Manager consults only for a genuinely new
+    /// `agent_id`. Any non-2xx response maps to [`ClientError::Http`].
+    pub async fn register(&self) -> Result<RegisterResponse, ClientError> {
         let request = RegisterRequest {
-            enrollment_token: self.cfg.enrollment_token.clone(),
+            agent_id: self.cfg.agent_id.clone(),
             hostname: local_hostname(),
-            os: std::env::consts::OS.to_string(),
-            arch: std::env::consts::ARCH.to_string(),
+            ip_address: None,
+            os_type: std::env::consts::OS.to_string(),
+            os_version: String::new(),
             agent_version: env!("CARGO_PKG_VERSION").to_string(),
+            metadata: None,
+            enrollment_token: self.cfg.enrollment_token.clone(),
         };
 
-        let url = format!("{}{REGISTER_PATH}", self.cfg.base_url.trim_end_matches('/'));
-        let response = self.http.post(url).json(&request).send().await?;
-
-        let status = response.status();
-        if !status.is_success() {
-            return Err(ClientError::Http {
-                status: status.as_u16(),
-            });
-        }
-
-        let identity: AgentIdentity = response.json().await?;
-        Ok(identity)
-    }
-
-    /// Reports agent health to `/api/v1/endpoint/heartbeat`, HMAC-signed
-    /// with `id`'s api_key. Any non-2xx response maps to
-    /// [`ClientError::Http`].
-    pub async fn heartbeat(
-        &self,
-        id: &AgentIdentity,
-        status: &HeartbeatBody,
-    ) -> Result<(), ClientError> {
-        let body = serde_json::to_vec(status)?;
-        self.send_signed(Method::POST, HEARTBEAT_PATH, id, body)
-            .await?;
-        Ok(())
-    }
-
-    /// Reports a batch of observed events to `/api/v1/endpoint/events`,
-    /// HMAC-signed with `id`'s api_key. Any non-2xx response maps to
-    /// [`ClientError::Http`].
-    pub async fn report_events(
-        &self,
-        id: &AgentIdentity,
-        events: &[EndpointEvent],
-    ) -> Result<(), ClientError> {
-        let body = serde_json::to_vec(events)?;
-        self.send_signed(Method::POST, EVENTS_PATH, id, body)
-            .await?;
-        Ok(())
-    }
-
-    /// Fetches this agent's current runtime config from
-    /// `/api/v1/endpoint/config` — an HMAC-signed GET over an empty body.
-    /// Any non-2xx response maps to [`ClientError::Http`].
-    pub async fn fetch_config(&self, id: &AgentIdentity) -> Result<AgentConfig, ClientError> {
         let response = self
-            .send_signed(Method::GET, CONFIG_PATH, id, Vec::new())
+            .send_json(Method::POST, REGISTER_PATH, &request)
             .await?;
+        let body: RegisterResponse = response.json().await?;
+        Ok(body)
+    }
+
+    /// Reports agent health to `/api/v1/endpoint/heartbeat`. `status`
+    /// should be one of `"active"`, `"inactive"`, `"disconnected"` — an
+    /// unregistered `agent_id` responds 404, mapped to
+    /// [`ClientError::Http`] like any other non-2xx status.
+    pub async fn heartbeat(&self, status: &str) -> Result<(), ClientError> {
+        let request = HeartbeatRequest {
+            agent_id: self.cfg.agent_id.clone(),
+            status: status.to_string(),
+        };
+        let response = self
+            .send_json(Method::POST, HEARTBEAT_PATH, &request)
+            .await?;
+        // Parsed (and discarded) purely to verify the response actually
+        // matches the real wire shape — see `HeartbeatResponse`'s doc.
+        let _body: HeartbeatResponse = response.json().await?;
+        Ok(())
+    }
+
+    /// Reports a batch of observed events to `/api/v1/endpoint/events`.
+    /// Sent as a bare JSON array — the Manager does not accept an
+    /// `{agent_id, events: [...]}` envelope; each event already carries its
+    /// own `agent_id` (see [`EndpointEvent`]'s doc). Any non-2xx response
+    /// maps to [`ClientError::Http`].
+    pub async fn report_events(&self, events: &[EndpointEvent]) -> Result<(), ClientError> {
+        let response = self.send_json(Method::POST, EVENTS_PATH, events).await?;
+        let _body: ReportEventsResponse = response.json().await?;
+        Ok(())
+    }
+
+    /// Fetches this agent's current effective config from
+    /// `/api/v1/endpoint/config`. Any non-2xx response maps to
+    /// [`ClientError::Http`].
+    pub async fn fetch_config(&self) -> Result<AgentConfig, ClientError> {
+        let response = self.send_get(CONFIG_PATH).await?;
         let config: AgentConfig = response.json().await?;
         Ok(config)
     }
 
-    /// Shared plumbing for every HMAC-authenticated call: serializes
-    /// nothing itself (the caller already has `body_bytes`), signs
-    /// `body_bytes` with an [`HmacSigner`] built from `id`, attaches the
-    /// resulting `x-agent-id`/`x-api-key` headers, sends the request, and
-    /// maps a non-2xx status to [`ClientError::Http`] before the caller
-    /// ever tries to parse a response body.
-    async fn send_signed(
+    /// Shared plumbing for a JSON-body call: attaches the static
+    /// `x-agent-id`/`x-api-key` headers and serializes `body`. Maps a
+    /// non-2xx status to [`ClientError::Http`] before the caller tries to
+    /// parse a response body.
+    async fn send_json<T: serde::Serialize + ?Sized>(
         &self,
         method: Method,
         path: &str,
-        id: &AgentIdentity,
-        body_bytes: Vec<u8>,
+        body: &T,
     ) -> Result<reqwest::Response, ClientError> {
-        let signer = HmacSigner::new(id.agent_id.clone(), id.api_key.as_bytes().to_vec());
-        let auth_headers = signer.headers(&body_bytes);
-
         let url = format!("{}{path}", self.cfg.base_url.trim_end_matches('/'));
-        let mut request = self
-            .http
-            .request(method, url)
-            .header(reqwest::header::CONTENT_TYPE, "application/json")
-            .body(body_bytes);
-        for (name, value) in auth_headers {
+        let request = self.http.request(method, url).json(body);
+        self.finish(request).await
+    }
+
+    /// Shared plumbing for a bodyless GET call — same auth headers, same
+    /// non-2xx mapping, as [`Self::send_json`].
+    async fn send_get(&self, path: &str) -> Result<reqwest::Response, ClientError> {
+        let url = format!("{}{path}", self.cfg.base_url.trim_end_matches('/'));
+        let request = self.http.get(url);
+        self.finish(request).await
+    }
+
+    /// Attaches the static auth headers, sends `request`, and maps a
+    /// non-2xx status to [`ClientError::Http`].
+    async fn finish(
+        &self,
+        mut request: reqwest::RequestBuilder,
+    ) -> Result<reqwest::Response, ClientError> {
+        for (name, value) in agent_headers(&self.cfg.agent_id, &self.cfg.api_key) {
             request = request.header(name, value);
         }
 
         let response = request.send().await?;
-
         let status = response.status();
         if !status.is_success() {
             return Err(ClientError::Http {
@@ -177,14 +187,13 @@ impl SkausWatchClient {
 
 /// Best-effort local hostname for the registration payload. The Manager
 /// treats this field as informational only, never an identity key (that's
-/// [`AgentIdentity::agent_id`], assigned by the Manager itself at
-/// register) — but it's still the operator-facing label a monitoring
-/// product's admin uses to tell endpoints apart, so it must be the real
-/// hostname, not an env-var placeholder: `$HOSTNAME` is not exported under
-/// systemd units, Windows services, or most other supervisors — exactly how
-/// this agent runs in production — so an env-var fallback would report the
-/// same placeholder for most real deployments, defeating endpoint
-/// identification.
+/// `agent_id`, provisioned out-of-band into [`ClientConfig`]) — but it's
+/// still the operator-facing label a monitoring product's admin uses to
+/// tell endpoints apart, so it must be the real hostname, not an env-var
+/// placeholder: `$HOSTNAME` is not exported under systemd units, Windows
+/// services, or most other supervisors — exactly how this agent runs in
+/// production — so an env-var fallback would report the same placeholder
+/// for most real deployments, defeating endpoint identification.
 ///
 /// Unix: `nix::unistd::gethostname()`, the real `gethostname(2)` syscall —
 /// matches `bins/penguind/src/daemon_main.rs`'s identical call for the
@@ -211,7 +220,12 @@ mod tests {
 
     #[test]
     fn new_builds_a_client_for_a_valid_config() {
-        let cfg = ClientConfig::new("https://manager.example.com".to_string(), "tok".to_string());
+        let cfg = ClientConfig::new(
+            "https://manager.example.com".to_string(),
+            "agent-1".to_string(),
+            "static-key".to_string(),
+            None,
+        );
         assert!(SkausWatchClient::new(cfg).is_ok());
     }
 

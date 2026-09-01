@@ -11,10 +11,12 @@ publish = false
 workspace = true
 
 [dependencies]
-# SkausWatch agent API client: HTTP transport with HMAC-SHA256 request signing.
-# Default features stay off (see root Cargo.toml comment on the reqwest entry):
-# the workspace is pinned to aws-lc-rs, so TLS is wired manually with rustls +
-# webpki-roots, matching squawk-client's pattern.
+# SkausWatch agent API client: HTTP transport authenticated with a static,
+# out-of-band provisioned x-agent-id/x-api-key header pair (no client-side
+# HMAC/signing — see src/auth.rs). Default features stay off (see root
+# Cargo.toml comment on the reqwest entry): the workspace is pinned to
+# aws-lc-rs, so TLS is wired manually with rustls + webpki-roots, matching
+# squawk-client's pattern.
 reqwest = { workspace = true, features = ["json"] }
 rustls.workspace = true
 webpki-roots.workspace = true
@@ -22,10 +24,6 @@ tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
-# HMAC-SHA256 request signing for agent authentication.
-hmac = "=0.12.1"
-# SHA256 message digest for HMAC computation.
-sha2 = "=0.10.9"
 
 [target.'cfg(unix)'.dependencies]
 # Real hostname for the registration payload — see `client::local_hostname`'s

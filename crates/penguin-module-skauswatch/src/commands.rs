@@ -6,6 +6,7 @@
 //! handler that routes on command name and flag values.
 
 use std::collections::{BTreeMap, HashMap};
+use std::sync::atomic::Ordering;
 
 use penguin_sdk::{CommandResult, CommandSpec, FlagSpec, FlagType, Module, ModuleError};
 use serde::Serialize;
@@ -31,7 +32,7 @@ pub fn command_tree() -> Vec<CommandSpec> {
         CommandSpec {
             name: "enroll".to_string(),
             use_line: "enroll".to_string(),
-            short: "(Re-)enroll this endpoint with the SkausWatch Manager".to_string(),
+            short: "Force a fresh check-in with the SkausWatch Manager".to_string(),
             ..Default::default()
         },
     ]
@@ -114,25 +115,17 @@ fn format_status_text(status: &penguin_sdk::Status) -> String {
     output
 }
 
-/// `skauswatch enroll`: triggers re-enrollment by clearing the cached
-/// identity and allowing the heartbeat loop to register a fresh one.
+/// `skauswatch enroll`: this agent's identity (`agent_id`/`api_key`) is
+/// always provisioned out-of-band, never acquired via this command — so
+/// "enroll" means forcing a fresh `register()` check-in rather than
+/// clearing any cached identity. Clears [`crate::module::Inner::checked_in`]
+/// so the next heartbeat tick calls `register()` again, regardless of
+/// whether an earlier check-in already succeeded this run.
 async fn cmd_enroll(module: &SkausWatchModule) -> Result<CommandResult, ModuleError> {
-    // Clear cached identity so the next heartbeat tick re-registers.
-    // Recover from poisoned mutex rather than panicking on prior thread panic.
-    {
-        let mut guard = module
-            .inner
-            .identity
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        *guard = None;
-    }
-
-    // Attempt to delete the persisted identity from the secret store
-    let _ = module.host().secrets().delete("agent_identity").await;
+    module.inner.checked_in.store(false, Ordering::SeqCst);
 
     Ok(CommandResult {
-        output: "enrolled: identity cleared, re-enrollment scheduled on next heartbeat".to_string(),
+        output: "check-in scheduled: this agent will re-register with the Manager on the next heartbeat tick".to_string(),
         json: Vec::new(),
         exit_code: 0,
     })
@@ -179,49 +172,38 @@ mod tests {
         }
     }
 
+    /// `enroll` forces a fresh check-in: clears `checked_in` so the next
+    /// heartbeat tick calls `register()` again, even though this agent's
+    /// identity itself (`agent_id`/`api_key`) is never cleared — it's
+    /// provisioned out-of-band, not something this command can "unenroll".
     #[tokio::test]
-    async fn enroll_dispatch_recovers_from_poisoned_mutex() {
-        // This test verifies that cmd_enroll doesn't panic on a poisoned mutex.
-        // Poison the identity mutex by spawning a thread that panics while
-        // holding its guard.
+    async fn enroll_dispatch_clears_checked_in_so_the_next_tick_re_registers() {
         use crate::module::SkausWatchModule;
         use crate::testutil;
 
         let module = SkausWatchModule::new();
-        module.init(testutil::fake_host_default()).await.unwrap();
+        module
+            .init(testutil::fake_host_default().await)
+            .await
+            .unwrap();
+        module
+            .inner
+            .checked_in
+            .store(true, std::sync::atomic::Ordering::SeqCst);
 
-        // Set a panic hook to suppress the unwind message from the poisoning
-        // thread, keeping test output clean.
-        let default_hook = std::panic::take_hook();
-        std::panic::set_hook(Box::new(|_| {
-            // Silently consume the panic message
-        }));
-
-        // Poison the identity mutex: a thread panics while holding its guard.
-        let inner = module.inner.clone();
-        let handle = std::thread::spawn(move || {
-            let _guard = inner.identity.lock().unwrap();
-            panic!("intentionally poison the identity mutex");
-        });
-        assert!(
-            handle.join().is_err(),
-            "the spawned thread should have panicked"
-        );
-        assert!(
-            module.inner.identity.lock().is_err(),
-            "mutex is now poisoned"
-        );
-
-        // Restore the default panic hook.
-        std::panic::set_hook(default_hook);
-
-        // dispatch(enroll) must recover from the poison and NOT panic.
         let out = module
             .dispatch(&["enroll".to_string()], &HashMap::new(), &[])
-            .await;
+            .await
+            .expect("enroll dispatch succeeds");
+        assert_eq!(out.exit_code, 0);
+        assert!(out.output.contains("re-register"));
+
         assert!(
-            out.is_ok(),
-            "enroll dispatch must recover from a poisoned mutex, got {out:?}"
+            !module
+                .inner
+                .checked_in
+                .load(std::sync::atomic::Ordering::SeqCst),
+            "enroll must clear checked_in so the next tick re-registers"
         );
     }
 }
