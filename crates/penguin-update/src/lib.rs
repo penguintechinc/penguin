@@ -49,4 +49,8 @@ pub use release::{
     GithubAsset, GithubRelease, SelectError, SelectedAsset, select_asset, select_latest_release,
 };
 pub use updater::{UpdateConfig, Updater};
-pub use verify::VerifyError;
+// `verify` itself (not just `VerifyError`) is re-exported so other crates —
+// currently penguin-selfprotect's IntegrityManifest::verify_signature — can
+// reuse this exact minisign check rather than duplicating it against a
+// second `minisign-verify` dependency.
+pub use verify::{VerifyError, verify};

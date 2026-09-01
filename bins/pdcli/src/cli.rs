@@ -112,6 +112,7 @@ pub async fn run(args: Vec<String>) -> ExitCode {
         "status" => cmd_status(client, sub_matches, &socket_path).await,
         "logs" => cmd_logs(client, sub_matches, &socket_path).await,
         "update" => cmd_update(client, sub_matches, &socket_path).await,
+        "otel" => cmd_otel(client, sub_matches, &socket_path).await,
         module_name => cmd_dispatch(client, module_name, &modules, sub_matches, &socket_path).await,
     }
 }
@@ -329,6 +330,61 @@ async fn cmd_status(
                     "{}",
                     penguin_cli_core::render::render_status_table(&response.modules)
                 );
+            }
+            ExitCode::SUCCESS
+        }
+        Err(status) => {
+            print_rpc_error(&status, socket_path);
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// `penguin otel [status]`. Only `status` exists today; any other (or
+/// missing) subcommand is a usage error, matching how `clap` would reject an
+/// unregistered leaf if `otel` accepted no positional of its own.
+async fn cmd_otel(
+    client: Option<DaemonClient<Channel>>,
+    matches: &ArgMatches,
+    socket_path: &str,
+) -> ExitCode {
+    match matches.subcommand() {
+        Some(("status", sub_matches)) => cmd_otel_status(client, sub_matches, socket_path).await,
+        _ => {
+            eprintln!("penguin: otel requires a subcommand (status)");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// `penguin otel status`. Reuses the existing `GetStatus` RPC (no new RPC —
+/// the daemon's `otel` field on `GetStatusResponse` is additive) and reports
+/// only `{enabled, endpoint, kind}`, matching the daemon's `OtelStatus`
+/// message.
+async fn cmd_otel_status(
+    client: Option<DaemonClient<Channel>>,
+    matches: &ArgMatches,
+    socket_path: &str,
+) -> ExitCode {
+    let Some(mut client) = client else {
+        print_daemon_unreachable(socket_path);
+        return ExitCode::FAILURE;
+    };
+
+    let request = pb::GetStatusRequest {
+        api_version: penguin_cli_core::API_VERSION.to_string(),
+        name: String::new(),
+    };
+    match with_timeout(DEFAULT_RPC_TIMEOUT, client.get_status(request)).await {
+        Ok(response) => {
+            let Some(otel) = response.into_inner().otel else {
+                print!("{}", penguin_cli_core::render::OTEL_STATUS_UNAVAILABLE);
+                return ExitCode::FAILURE;
+            };
+            if penguin_cli_core::verbs::json_requested(matches) {
+                print!("{}", penguin_cli_core::json::otel_status_json(&otel));
+            } else {
+                print!("{}", penguin_cli_core::render::render_otel_status(&otel));
             }
             ExitCode::SUCCESS
         }

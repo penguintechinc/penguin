@@ -72,6 +72,42 @@ pub trait UpdateClient: Send + Sync {
     async fn apply_update(&self) -> Result<(), String>;
 }
 
+/// A snapshot of the daemon's OTel exporter configuration, as reported by
+/// `GetStatus`'s `otel` field. Deliberately a plain struct rather than a
+/// `penguin_otel` type: `DaemonService` only ever needs to *report* these two
+/// values, never build or drive a pipeline itself, so it stays decoupled from
+/// `OtelConfig`/`OtelPipeline`'s own shape.
+#[derive(Clone, Debug, Default)]
+pub struct OtelStatusSummary {
+    /// Whether the `penguin.otel` license flag is enabled for this daemon.
+    pub enabled: bool,
+    /// The OTLP collector endpoint the daemon was configured to export to —
+    /// meaningful only when `enabled` is `true`.
+    pub endpoint: String,
+}
+
+impl OtelStatusSummary {
+    /// The exporter kind string `GetStatus` reports: `"otel"` when actively
+    /// exporting, `"noop"` when the pipeline was never built.
+    fn kind(&self) -> &'static str {
+        if self.enabled { "otel" } else { "noop" }
+    }
+}
+
+/// A snapshot of detected FleetDM/osqueryd coexistence, as reported by
+/// `GetStatus`'s `fleet_dm` field. Deliberately a plain struct rather than
+/// `penguin_selfprotect::FleetStatus`: `DaemonService` only ever needs to
+/// *report* these two optional version strings, never run detection itself,
+/// so it stays decoupled from that crate's probe machinery — same rationale
+/// as [`OtelStatusSummary`] staying decoupled from `OtelConfig`/`OtelPipeline`.
+#[derive(Clone, Debug, Default)]
+pub struct FleetDmStatusSummary {
+    /// Detected `fleetd` version string, `None` if not present on this host.
+    pub fleetd: Option<String>,
+    /// Detected `osqueryd` version string, `None` if not present on this host.
+    pub osqueryd: Option<String>,
+}
+
 /// The `penguin.daemon.v1.Daemon` gRPC service implementation.
 pub struct DaemonService {
     supervisor: Supervisor,
@@ -79,6 +115,8 @@ pub struct DaemonService {
     logs: Arc<LogRing>,
     version: String,
     update: Option<Arc<dyn UpdateClient>>,
+    otel: OtelStatusSummary,
+    fleet_dm: FleetDmStatusSummary,
 }
 
 impl DaemonService {
@@ -92,6 +130,8 @@ impl DaemonService {
         logs: Arc<LogRing>,
         version: impl Into<String>,
         update: Option<Arc<dyn UpdateClient>>,
+        otel: OtelStatusSummary,
+        fleet_dm: FleetDmStatusSummary,
     ) -> DaemonService {
         DaemonService {
             supervisor,
@@ -99,6 +139,30 @@ impl DaemonService {
             logs,
             version: version.into(),
             update,
+            otel,
+            fleet_dm,
+        }
+    }
+
+    /// Builds the `otel` field of `GetStatusResponse` from the summary
+    /// handed to [`DaemonService::new`] at construction.
+    fn otel_status_proto(&self) -> pb::OtelStatus {
+        pb::OtelStatus {
+            enabled: self.otel.enabled,
+            endpoint: self.otel.endpoint.clone(),
+            kind: self.otel.kind().to_string(),
+        }
+    }
+
+    /// Builds the `fleet_dm` field of `GetStatusResponse` from the summary
+    /// handed to [`DaemonService::new`] at construction — `*_present` false
+    /// and its paired `*_version` empty when that binary was not detected.
+    fn fleet_dm_status_proto(&self) -> pb::FleetDmStatus {
+        pb::FleetDmStatus {
+            fleetd_present: self.fleet_dm.fleetd.is_some(),
+            fleetd_version: self.fleet_dm.fleetd.clone().unwrap_or_default(),
+            osqueryd_present: self.fleet_dm.osqueryd.is_some(),
+            osqueryd_version: self.fleet_dm.osqueryd.clone().unwrap_or_default(),
         }
     }
 
@@ -239,6 +303,8 @@ impl Daemon for DaemonService {
         Ok(Response::new(pb::GetStatusResponse {
             daemon_version: self.version.clone(),
             modules,
+            otel: Some(self.otel_status_proto()),
+            fleet_dm: Some(self.fleet_dm_status_proto()),
         }))
     }
 
@@ -984,16 +1050,25 @@ mod tests {
         registry: BTreeMap<String, Factory>,
         update: Option<Arc<dyn UpdateClient>>,
     ) -> ServiceFixture {
-        build_service_with_external(registry, update, None)
+        build_service_with_external(
+            registry,
+            update,
+            None,
+            OtelStatusSummary::default(),
+            FleetDmStatusSummary::default(),
+        )
     }
 
-    /// Same as [`build_service`], but also wires in an [`ExternalLoader`] —
-    /// kept as a second function rather than an added parameter on
+    /// Same as [`build_service`], but also wires in an [`ExternalLoader`], an
+    /// explicit [`OtelStatusSummary`], and an explicit [`FleetDmStatusSummary`]
+    /// — kept as a second function rather than added parameters on
     /// [`build_service`] so its many existing callers stay untouched.
     fn build_service_with_external(
         registry: BTreeMap<String, Factory>,
         update: Option<Arc<dyn UpdateClient>>,
         external: Option<Arc<dyn ExternalLoader>>,
+        otel: OtelStatusSummary,
+        fleet_dm: FleetDmStatusSummary,
     ) -> ServiceFixture {
         let state_dir = TempDir::new().unwrap();
         let config_dir = TempDir::new().unwrap();
@@ -1008,6 +1083,7 @@ mod tests {
             Arc::new(FakeLicenseChecker),
             events,
             state_dir.path().to_path_buf(),
+            None,
         ));
         let supervisor = Supervisor::new(SupervisorConfig {
             registry,
@@ -1020,7 +1096,15 @@ mod tests {
             external,
         });
         let logs = Arc::new(LogRing::new(32));
-        let service = DaemonService::new(supervisor.clone(), broker, logs.clone(), "1.2.3", update);
+        let service = DaemonService::new(
+            supervisor.clone(),
+            broker,
+            logs.clone(),
+            "1.2.3",
+            update,
+            otel,
+            fleet_dm,
+        );
         ServiceFixture {
             service,
             supervisor,
@@ -1182,7 +1266,13 @@ mod tests {
             available: Vec::new(),
             load_errors: Vec::new(),
         });
-        let fixture = build_service_with_external(BTreeMap::new(), None, Some(external));
+        let fixture = build_service_with_external(
+            BTreeMap::new(),
+            None,
+            Some(external),
+            OtelStatusSummary::default(),
+            FleetDmStatusSummary::default(),
+        );
         let err = fixture
             .service
             .load_module(Request::new(pb::LoadModuleRequest {
@@ -1200,7 +1290,13 @@ mod tests {
             available: vec!["ext-plugin"],
             load_errors: Vec::new(),
         });
-        let fixture = build_service_with_external(BTreeMap::new(), None, Some(external));
+        let fixture = build_service_with_external(
+            BTreeMap::new(),
+            None,
+            Some(external),
+            OtelStatusSummary::default(),
+            FleetDmStatusSummary::default(),
+        );
         let response = fixture
             .service
             .load_module(Request::new(pb::LoadModuleRequest {
@@ -1219,7 +1315,13 @@ mod tests {
             available: Vec::new(),
             load_errors: vec![("bad-sig", "sha256 mismatch")],
         });
-        let fixture = build_service_with_external(BTreeMap::new(), None, Some(external));
+        let fixture = build_service_with_external(
+            BTreeMap::new(),
+            None,
+            Some(external),
+            OtelStatusSummary::default(),
+            FleetDmStatusSummary::default(),
+        );
         let err = fixture
             .service
             .load_module(Request::new(pb::LoadModuleRequest {
@@ -1357,6 +1459,103 @@ mod tests {
         assert_eq!(response.modules.len(), 1);
         assert_eq!(response.modules[0].name, "alpha");
         assert_eq!(response.modules[0].health, "healthy");
+    }
+
+    #[tokio::test]
+    async fn get_status_reports_enabled_otel_summary_as_kind_otel() {
+        let fixture = build_service_with_external(
+            BTreeMap::new(),
+            None,
+            None,
+            OtelStatusSummary {
+                enabled: true,
+                endpoint: "http://localhost:4318".to_string(),
+            },
+            FleetDmStatusSummary::default(),
+        );
+
+        let response = fixture
+            .service
+            .get_status(Request::new(pb::GetStatusRequest {
+                api_version: String::new(),
+                name: String::new(),
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+
+        let otel = response.otel.expect("otel field must be populated");
+        assert!(otel.enabled);
+        assert_eq!(otel.endpoint, "http://localhost:4318");
+        assert_eq!(otel.kind, "otel");
+    }
+
+    #[tokio::test]
+    async fn get_status_reports_disabled_otel_summary_as_kind_noop() {
+        let fixture = build_service(BTreeMap::new(), None);
+
+        let response = fixture
+            .service
+            .get_status(Request::new(pb::GetStatusRequest {
+                api_version: String::new(),
+                name: String::new(),
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+
+        let otel = response.otel.expect("otel field must be populated");
+        assert!(!otel.enabled);
+        assert_eq!(otel.kind, "noop");
+    }
+
+    #[tokio::test]
+    async fn get_status_reports_fleet_dm_summary_when_fleetd_present() {
+        let fixture = build_service_with_external(
+            BTreeMap::new(),
+            None,
+            None,
+            OtelStatusSummary::default(),
+            FleetDmStatusSummary {
+                fleetd: Some("1.30.0".to_string()),
+                osqueryd: None,
+            },
+        );
+
+        let response = fixture
+            .service
+            .get_status(Request::new(pb::GetStatusRequest {
+                api_version: String::new(),
+                name: String::new(),
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+
+        let fleet_dm = response.fleet_dm.expect("fleet_dm field must be populated");
+        assert!(fleet_dm.fleetd_present);
+        assert_eq!(fleet_dm.fleetd_version, "1.30.0");
+        assert!(!fleet_dm.osqueryd_present);
+        assert_eq!(fleet_dm.osqueryd_version, "");
+    }
+
+    #[tokio::test]
+    async fn get_status_reports_fleet_dm_absent_by_default() {
+        let fixture = build_service(BTreeMap::new(), None);
+
+        let response = fixture
+            .service
+            .get_status(Request::new(pb::GetStatusRequest {
+                api_version: String::new(),
+                name: String::new(),
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+
+        let fleet_dm = response.fleet_dm.expect("fleet_dm field must be populated");
+        assert!(!fleet_dm.fleetd_present);
+        assert!(!fleet_dm.osqueryd_present);
     }
 
     #[tokio::test]

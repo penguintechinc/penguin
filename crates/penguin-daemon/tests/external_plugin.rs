@@ -274,6 +274,7 @@ fn build_supervisor(loader: Arc<dyn ExternalLoader>) -> (Supervisor, TempDir, Te
         Arc::new(FakeLicenseChecker),
         events,
         state_dir.path().to_path_buf(),
+        None,
     ));
     let supervisor = Supervisor::new(SupervisorConfig {
         registry: std::collections::BTreeMap::new(),

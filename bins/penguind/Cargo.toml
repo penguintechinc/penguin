@@ -26,14 +26,25 @@ penguin-proto.workspace = true
 # bins/pdcli/Cargo.toml.
 penguin-secrets = { path = "../../crates/penguin-secrets" }
 penguin-licensing = { path = "../../crates/penguin-licensing" }
+# Builds the OTLP pipeline gated on the `penguin.otel` license flag — see
+# src/daemon_main.rs's otel wiring block.
+penguin-otel.workspace = true
 # Built-in module registry (squawk, and future built-ins) — see
 # `src/daemon_main.rs`'s `SupervisorConfig::registry` wiring.
 penguin-registry = { path = "../../crates/penguin-registry" }
 # M7.2: the real self-updater `DaemonService`'s `UpdateClient` hook wires to
-# — see `src/daemon_main.rs`'s `SelfUpdateClient` adapter. Not a workspace
-# dependency yet, same per-milestone-path convention as the three crates
-# above.
+# — see `src/daemon_main.rs`'s `SelfUpdateClient` adapter. Now a workspace
+# dependency (promoted for penguin-selfprotect — see root Cargo.toml), but
+# left path-referenced here rather than switched to `.workspace = true` to
+# keep this task's diff scoped to penguin-selfprotect.
 penguin-update = { path = "../../crates/penguin-update" }
+# M8: authorizes `penguind service uninstall` (local secret / break-glass
+# token / console deauthorization) — see src/service/mod.rs's teardown
+# gate. Path-referenced rather than `.workspace = true`, matching the
+# convention above (penguin-secrets, penguin-licensing, penguin-update) of
+# keeping this binary's per-milestone crates path-scoped even once they're
+# promoted to workspace dependencies for another consumer.
+penguin-selfprotect = { path = "../../crates/penguin-selfprotect" }
 
 tokio.workspace = true
 tokio-stream.workspace = true
@@ -56,9 +67,11 @@ service-manager.workspace = true
 tracing-subscriber.workspace = true
 # Startup error enum (DaemonBinError).
 thiserror.workspace = true
-# Resolves the daemon's own uid for PeerAuthInterceptor; already pulled in
-# transitively via penguin-ipc, so this adds no new dependency to the graph.
-nix.workspace = true
+# Resolves the daemon's own uid for PeerAuthInterceptor (already pulled in
+# transitively via penguin-ipc, so the base dependency adds nothing new) and,
+# via the extra "hostname" feature, the `node_id` resource attribute tagged
+# on every OTel export in src/daemon_main.rs's otel wiring block.
+nix = { workspace = true, features = ["hostname"] }
 
 [dev-dependencies]
 # Test-only scratch directories for host_wiring.rs's secret-store isolation

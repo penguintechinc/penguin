@@ -10,7 +10,8 @@
 //! `waddleai` is the fourth: the desktop-side companion to WaddleAI's
 //! agent-hooks feature — shim installation, credential storage, and
 //! telemetry only, never policy (see
-//! `penguin_module_waddleai::WaddleAiModule`'s top-level doc).
+//! `penguin_module_waddleai::WaddleAiModule`'s top-level doc). `skauswatch`
+//! is the fifth: system auditing and inventory collection.
 
 use std::collections::BTreeMap;
 
@@ -28,6 +29,7 @@ pub fn builtin_modules() -> BTreeMap<String, Factory> {
     );
     registry.insert("waddlebot".to_string(), penguin_module_waddlebot::factory);
     registry.insert("waddleai".to_string(), penguin_module_waddleai::factory);
+    registry.insert("skauswatch".to_string(), penguin_module_skauswatch::factory);
     registry
 }
 
@@ -110,6 +112,24 @@ mod tests {
             "the module itself (shim install/status/telemetry) must load with no license \
              server reachable; the WaddleAI product entitlement is checked server-side when a \
              forwarded hook event is evaluated, not at module load time"
+        );
+    }
+
+    #[test]
+    fn skauswatch_is_registered_as_a_builtin() {
+        assert!(builtin_modules().contains_key("skauswatch"));
+    }
+
+    #[test]
+    fn skauswatch_factory_reports_its_own_identity_before_init() {
+        let registry = builtin_modules();
+        let factory = registry.get("skauswatch").expect("skauswatch registered");
+        let info = factory().info();
+        assert_eq!(info.name, "skauswatch");
+        assert_eq!(info.version, "1.0.0");
+        assert!(
+            info.license_feature.is_empty(),
+            "skauswatch loads core; entitlement enforced server-side"
         );
     }
 }

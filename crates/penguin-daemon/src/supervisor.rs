@@ -1086,6 +1086,7 @@ mod tests {
             Arc::new(FakeLicenseChecker),
             events,
             state_dir.path().to_path_buf(),
+            None,
         ));
         let supervisor = Supervisor::new(SupervisorConfig {
             registry,

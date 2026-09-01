@@ -36,6 +36,7 @@ penguin-sdk = { path = "crates/penguin-sdk" }
 penguin-telemetry = { path = "crates/penguin-telemetry" }
 penguin-ipc = { path = "crates/penguin-ipc" }
 penguin-daemon = { path = "crates/penguin-daemon" }
+penguin-otel = { path = "crates/penguin-otel" }
 # The external-plugin path: verification pipeline + the go-plugin host that
 # launches a verified binary. The daemon depends on both so LoadModule can
 # resolve a builtin OR an external module through one code path.
@@ -53,12 +54,25 @@ penguin-module-tobogganing = { path = "crates/penguin-module-tobogganing" }
 # reports telemetry. Policy decisions stay server-side; see the crate's own
 # top-level doc.
 penguin-module-waddleai = { path = "crates/penguin-module-waddleai" }
+# SkausWatch: monitoring and alerting endpoint client.
+penguin-module-skauswatch = { path = "crates/penguin-module-skauswatch" }
 # The pure tray menu model, consumed by the penguin-tray platform shells (M7.3).
 penguin-tray-model = { path = "crates/penguin-tray-model" }
 # Desktop client (Phase 2a): IPC wrapper + keychain + OAuth glue for the Tauri shell.
 penguin-desktop-core = { path = "crates/penguin-desktop-core" }
 # OS keychain backend for desktop client session tokens.
 penguin-secrets = { path = "crates/penguin-secrets" }
+# SkausWatch agent API client with HMAC request signing.
+skauswatch-client = { path = "crates/skauswatch-client" }
+# Signed self-update: GitHub releases + minisign verify + in-place replace.
+# Was path-only (see bins/penguind/Cargo.toml's per-milestone convention)
+# until penguin-selfprotect became a second workspace-level consumer of its
+# `verify` function, promoting it here so both can write `.workspace = true`.
+penguin-update = { path = "crates/penguin-update" }
+# Agent self-protection (M8): signed IntegrityManifest verified against
+# `penguin-update::verify` — see that crate's `verify.rs` for why minisign
+# and why verify-only.
+penguin-selfprotect = { path = "crates/penguin-selfprotect" }
 
 # gRPC / protobuf. Wire-compatibility with the Go daemon and go-plugin is the
 # whole point of the rewrite, so these are pinned exactly.
@@ -132,10 +146,13 @@ rcgen = { version = "0.14", default-features = false, features = [
     "aws_lc_rs",
 ] }
 base64 = "0.22"
-# SHA256 hashing for obs-websocket v5 auth handshake. Pure Rust, no C dependency.
-# Used only by penguin-module-waddlebot's obs-adapter for the initial auth challenge,
-# not in any per-packet hot path.
-sha2 = "0.10"
+# SHA256 hashing for obs-websocket v5 auth handshake and SkausWatch HMAC signing.
+# Pure Rust, no C dependency. Used only by penguin-module-waddlebot's obs-adapter
+# for the initial auth challenge and skauswatch-client for request signing, not in
+# any per-packet hot path.
+sha2 = "=0.10.9"
+# HMAC message authentication code for SkausWatch agent request signing.
+hmac = "=0.12.1"
 # WebSocket client for obs-adapter's outbound integration. Default features OFF
 # to avoid pulling in rustls/ring (loopback-only connection, plaintext ws://,
 # so no TLS needed). "connect" feature enables connect_async for client connections.

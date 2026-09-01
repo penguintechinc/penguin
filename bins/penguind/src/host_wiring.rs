@@ -115,6 +115,7 @@ mod tests {
             Arc::new(FakeLicenseChecker),
             broker,
             state_dir.path().to_path_buf(),
+            None,
         );
 
         (secrets_dir, config_dir, state_dir, factory, secrets_root)

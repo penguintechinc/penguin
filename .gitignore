@@ -33,3 +33,6 @@ credentials.json
 # sessions; the migration work runs in an isolated worktree here)
 /.worktrees/
 .worktrees/
+
+# SDD scratch (subagent-driven-development workspace)
+/.superpowers/

@@ -23,18 +23,28 @@ use penguin_daemon::external::{ExternalLoader, PluginDirLoader};
 use penguin_daemon::host::{DaemonHostFactory, HostFactory, SecretStoreProvider};
 use penguin_daemon::lock::{self, LockError};
 use penguin_daemon::logring::LogRing;
-use penguin_daemon::service::{DaemonService, UpdateClient};
+use penguin_daemon::service::{
+    DaemonService, FleetDmStatusSummary, OtelStatusSummary, UpdateClient,
+};
 use penguin_daemon::supervisor::{Supervisor, SupervisorConfig};
 use penguin_ipc::groups_unix::SystemGroups;
 use penguin_ipc::listen_unix::{self, ListenerConfig, PeerAuthInterceptor};
 use penguin_ipc::{GroupResolver, IpcError};
 use penguin_licensing::{LicenseClient, LicenseClientOptions};
+use penguin_otel::{OtelConfig, OtelPipeline};
 use penguin_proto::daemon::v1::daemon_server::DaemonServer;
 use penguin_proto::desktop::v1::bridge_action_proxy_server::BridgeActionProxyServer;
 use penguin_proto::desktop::v1::session_proxy_server::SessionProxyServer;
-use penguin_sdk::{EventSink, LicenseChecker, SecretError};
+use penguin_sdk::{
+    EventSink, LicenseChecker, LogLevel, ModuleTelemetry, NoopTelemetry, SecretError, SecretStore,
+};
 use penguin_secrets::{Backend as SecretsBackend, Config as SecretsConfig, Store as SecretsStore};
+use penguin_selfprotect::{
+    LocalFileSource, ManifestSource, NoopConsoleSink, RealFleetProbe, detect, fleet_resource_attrs,
+    is_armed, scan_heal_report,
+};
 use penguin_telemetry::{Telemetry, TelemetryError};
+use tokio_util::sync::CancellationToken;
 
 use crate::host_wiring::SecretsStoreProvider;
 use crate::{VERSION, logging};
@@ -69,6 +79,15 @@ const LICENSE_REFRESH_INTERVAL: Duration = Duration::from_secs(5 * 60);
 /// `go-client/.goreleaser.yaml`'s `release.github.{owner,name}`.
 const RELEASE_REPO: &str = "penguintechinc/penguin";
 
+/// The OTLP collector endpoint used when the daemon config has no `otel`
+/// section of its own. `DaemonConfig` deliberately carries no `otel` field
+/// yet (see the wiring comment in [`run_daemon`]) — the console-driven
+/// override this constant would otherwise come from is the SP2 follow-up
+/// [`OtelConfig::merge`] already has a hook for, so a hardcoded local
+/// default is the minimal correct wiring for this milestone rather than
+/// adding a config field with no writer yet.
+const DEFAULT_OTEL_ENDPOINT: &str = "http://localhost:4318";
+
 /// The minisign public key trusted to verify release archives.
 ///
 /// `None` today: baking the real PenguinTech release-signing key into this
@@ -80,6 +99,59 @@ const RELEASE_REPO: &str = "penguintechinc/penguin";
 /// but `apply_update` fails closed with "no release verification key
 /// configured" — see [`penguin_update::UpdateError::NoVerificationKey`].
 const RELEASE_PUBLIC_KEY: Option<&str> = None;
+
+/// Secret-store namespace the self-protection "enrolled" proxy reads the
+/// tamper secret's hash from — must match `crate::service`'s own private
+/// `SELFPROTECT_SECRET_NAMESPACE` (duplicated rather than shared, same
+/// convention as `watchdog.rs`'s duplicated `DEFAULT_STATE_DIR`: that
+/// module's constant is private to its own file, and there is no shared
+/// `selfprotect`-constants module yet).
+const SELFPROTECT_SECRET_NAMESPACE: &str = "selfprotect";
+
+/// Secret-store key, within [`SELFPROTECT_SECRET_NAMESPACE`], the tamper-
+/// protection secret's Argon2id PHC hash is stored under — must match
+/// `crate::service::TAMPER_SECRET_KEY`.
+const SELFPROTECT_TAMPER_SECRET_KEY: &str = "tamper_secret";
+
+/// Where the (SP2-provisioned) signed integrity manifest is read from.
+/// `LocalFileSource` only, for this milestone — a controller-fetched source
+/// implementing the same `penguin_selfprotect::ManifestSource` trait is the
+/// SP2 follow-up (see that trait's doc). No manifest ships at this path
+/// yet, so `scan_heal_report` safely logs-and-no-ops every tick on a fresh
+/// install rather than acting on a missing/unverified manifest.
+const SELFPROTECT_MANIFEST_PATH: &str = "/etc/penguin/selfprotect-manifest.json";
+
+/// Root the integrity manifest's relative entry paths (e.g.
+/// `"bin/penguind"`) resolve against — this agent's install root. `/` is
+/// deliberately conservative: no install-root convention has been settled
+/// elsewhere in this codebase yet (packaging is still M7), so manifest
+/// entries are assumed already relative to the filesystem root until SP2
+/// settles a real value.
+const SELFPROTECT_ROOT: &str = "/";
+
+/// Directory holding the pristine "protected" copies
+/// `penguin_selfprotect::heal` restores tampered/missing files from. SP2
+/// provisions this out of band, alongside a real signed manifest; until
+/// then it is expected to be empty on most installs, so any heal attempt
+/// simply logs and is skipped rather than crashing the daemon (see
+/// `penguin_selfprotect::heal`'s own error handling, and
+/// `penguin_selfprotect::scan_heal_report`'s per-finding loop).
+const SELFPROTECT_PROTECTED_DIR: &str = "/var/lib/penguind/selfprotect/protected";
+
+/// Minisign public key trusted to verify the integrity manifest's
+/// signature. Empty — not a real key — for the same reason
+/// [`RELEASE_PUBLIC_KEY`]/`service::BREAK_GLASS_PUBKEY` are placeholders: a
+/// made-up key would look configured while verifying nothing real. An empty
+/// key fails to parse, so every `scan_heal_report` cycle safely no-ops
+/// (never trusts an unverified manifest) until SP2 bakes in the real
+/// PenguinTech integrity-manifest signing key.
+const SELFPROTECT_PUBKEY: &str = "";
+
+/// How often the armed self-protection loop runs one
+/// `penguin_selfprotect::scan_heal_report` cycle. `tokio::time::interval`'s
+/// first tick fires immediately, so an armed daemon's first scan happens at
+/// startup, not after this delay.
+const SELFPROTECT_SCAN_INTERVAL: Duration = Duration::from_secs(5 * 60);
 
 /// Adapts [`penguin_update::Updater`] to [`UpdateClient`], the trait
 /// [`DaemonService`]'s `CheckUpdate`/`ApplyUpdate` RPC handlers consult (see
@@ -234,6 +306,125 @@ async fn run_daemon() -> Result<(), DaemonBinError> {
     let license_refresh = license_client.spawn_background_refresh(LICENSE_REFRESH_INTERVAL);
     let license: Arc<dyn LicenseChecker> = license_client;
 
+    // OpenTelemetry pipeline: gated purely on the `penguin.otel` license
+    // flag via `LicenseChecker`, never an env var/CLI override (see
+    // `critical-rules.md` Feature Flags & License Tiers). Console-provided
+    // config override (SP2) is not implemented yet, so `OtelConfig::merge`
+    // always sees `None` here — a deliberate hook for that follow-up, not a
+    // missing feature in this milestone. A build failure (bad endpoint,
+    // etc.) degrades to no telemetry rather than aborting startup — modules
+    // still get a safe `NoopTelemetry` handle either way, see
+    // `penguin_daemon::host::DaemonHost::telemetry`.
+    // FleetDM/osqueryd coexistence: detect-only, never start/stop/configure
+    // FleetDM (see `penguin_selfprotect::fleetdm`'s module doc). Runs
+    // unconditionally, independent of the `penguin.otel` gate below —
+    // `GetStatus`'s `fleet_dm` field must report a real answer even when
+    // otel export itself is disabled.
+    let fleet = detect(&RealFleetProbe);
+    let fleet_dm_status = FleetDmStatusSummary {
+        fleetd: fleet.fleetd.clone(),
+        osqueryd: fleet.osqueryd.clone(),
+    };
+    let node_id = nix::unistd::gethostname()
+        .ok()
+        .and_then(|name| name.into_string().ok())
+        .unwrap_or_else(|| "unknown".to_string());
+    let otel_cfg = OtelConfig::merge(
+        OtelConfig {
+            endpoint: DEFAULT_OTEL_ENDPOINT.to_string(),
+            sampling_ratio: 1.0,
+            enabled: license.feature_enabled("penguin.otel"),
+        },
+        None,
+    );
+    // `GetStatus`'s `otel` field reports the daemon's configured exporter
+    // state (`pdcli otel status`), independent of whether building the real
+    // pipeline below actually succeeded — `enabled`/`endpoint` reflect
+    // configuration intent, not pipeline build outcome.
+    let otel_status = OtelStatusSummary {
+        enabled: otel_cfg.enabled,
+        endpoint: otel_cfg.endpoint.clone(),
+    };
+    // `OtelPipeline::build` takes a borrowed `&[(&str, &str)]`, so the owned
+    // values (node_id/service.version plus any detected FleetDM coexistence
+    // attrs) are built first and must outlive the borrowed view constructed
+    // from them below.
+    let mut owned_resource_attrs: Vec<(&str, String)> = vec![
+        ("node_id", node_id.clone()),
+        ("service.version", VERSION.to_string()),
+    ];
+    owned_resource_attrs.extend(fleet_resource_attrs(&fleet));
+    let resource_attrs: Vec<(&str, &str)> = owned_resource_attrs
+        .iter()
+        .map(|(key, value)| (*key, value.as_str()))
+        .collect();
+    let otel: Option<Arc<OtelPipeline>> = if otel_cfg.enabled {
+        match OtelPipeline::build(&otel_cfg, &resource_attrs) {
+            Ok(pipeline) => Some(Arc::new(pipeline)),
+            Err(err) => {
+                tracing::warn!(error = %err, "failed to build otel pipeline; telemetry export disabled");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    // Self-protection: arm only when enrolled AND the `penguin.self-protection`
+    // feature flag is on (`penguin_selfprotect::is_armed`). "Enrolled" uses
+    // the same interim proxy as `crate::service::resolve_teardown_ctx` (see
+    // that function's doc): a tamper-protection secret already provisioned
+    // in the secrets store is the best available enrollment signal until
+    // SP2 adds real enrollment state. `secrets_root` is only borrowed here
+    // (via `Store::namespaced`, which clones just the cheap namespace
+    // prefix) — it is still moved into `secrets_provider` below.
+    let selfprotect_flag_on = license.feature_enabled("penguin.self-protection");
+    let selfprotect_enrolled = secrets_root
+        .namespaced(SELFPROTECT_SECRET_NAMESPACE)
+        .get(SELFPROTECT_TAMPER_SECRET_KEY)
+        .await
+        .is_ok();
+    // Single arming decision, shared by both the integrity loop below and
+    // the watchdog peer spawn — see `spawn_watchdog_peer`'s doc for why the
+    // watchdog is gated on this exact same check rather than spawned
+    // unconditionally.
+    let selfprotect_armed = is_armed(selfprotect_enrolled, selfprotect_flag_on);
+    let selfprotect_loop = if selfprotect_armed {
+        let selfprotect_telemetry: Arc<dyn ModuleTelemetry> = match &otel {
+            Some(pipeline) => pipeline.scoped("selfprotect"),
+            None => Arc::new(NoopTelemetry),
+        };
+        tracing::info!("selfprotect: armed; integrity loop starting");
+        // Best-effort: spawn this daemon's mutual-supervision peer (see
+        // `crate::watchdog`'s module doc). Never fatal — a spawn failure
+        // here must not stop the daemon itself from starting, it only
+        // means the daemon-keeps-watchdog-alive half of mutual supervision
+        // didn't start this time (the watchdog side, once running, keeps
+        // trying to relaunch the daemon regardless). Placed after the
+        // single-instance lock is held (acquired earlier in this
+        // function), so a spawned watchdog's very first liveness check
+        // always finds a live daemon rather than racing this process's own
+        // startup. Gated on `selfprotect_armed`, the same `is_armed` check
+        // the integrity loop uses just below: the watchdog peer is part of
+        // the flag-gated self-protection subsystem (spec §4.1), so an
+        // unenrolled/dev agent or a flag-off node gets neither the
+        // integrity loop nor the watchdog peer — only the unconditional
+        // systemd `Restart=always` (see `packaging/systemd/penguind.service`)
+        // still applies regardless of arming.
+        spawn_watchdog_peer();
+        Some(spawn_selfprotect_loop(
+            node_id.clone(),
+            selfprotect_telemetry,
+        ))
+    } else {
+        tracing::debug!(
+            enrolled = selfprotect_enrolled,
+            flag_on = selfprotect_flag_on,
+            "selfprotect: not armed; integrity loop and watchdog peer not started"
+        );
+        None
+    };
+
     // Per-module secret isolation is part of DaemonHostFactory's own
     // contract (see `penguin_daemon::host::SecretStoreProvider`):
     // `SecretsStoreProvider` gives every module its own
@@ -248,6 +439,7 @@ async fn run_daemon() -> Result<(), DaemonBinError> {
         license,
         events,
         args.state_dir.clone(),
+        otel.clone(),
     ));
 
     // `daemon_cfg.plugins_dir` is scanned lazily, one `<name>/` at a time,
@@ -302,6 +494,8 @@ async fn run_daemon() -> Result<(), DaemonBinError> {
         logs,
         VERSION,
         Some(update_client),
+        otel_status,
+        fleet_dm_status,
     );
 
     let listener_cfg = ListenerConfig {
@@ -346,9 +540,138 @@ async fn run_daemon() -> Result<(), DaemonBinError> {
     tracing::info!("shutting down");
     supervisor.shutdown().await;
     license_refresh.stop().await;
+    // Stop the self-protection loop (if armed) *before* the otel flush
+    // attempt below: `SelfProtectLoopHandle::stop` awaits the loop task's
+    // actual exit, so the loop can never call into the OTel providers after
+    // `pipeline.shutdown()` runs — and dropping its `ModuleTelemetry` handle
+    // first also gives `Arc::into_inner(pipeline)` below its best chance of
+    // finding this the sole surviving reference.
+    if let Some(handle) = selfprotect_loop {
+        handle.stop().await;
+    }
+    // Best-effort flush: succeeds only if this is the last surviving handle
+    // on the pipeline. In practice every loaded module's `DaemonHost` (and
+    // any still-unwinding health-poll/restart background task — see
+    // `Supervisor`'s own "cheap to clone... background tasks hold their own
+    // handle" doc) may still be holding a clone at this point, so losing this
+    // race is expected and never treated as an error — a real network
+    // exporter must never block process shutdown.
+    if let Some(pipeline) = otel {
+        match Arc::into_inner(pipeline) {
+            Some(pipeline) => pipeline.shutdown(),
+            None => tracing::debug!(
+                "otel pipeline has other live references at shutdown; skipping final flush"
+            ),
+        }
+    }
     let _ = std::fs::remove_file(&daemon_cfg.socket_path);
 
     serve_result.map_err(DaemonBinError::Serve)
+}
+
+/// A running self-protection loop started by [`spawn_selfprotect_loop`].
+/// Same shape as `penguin_licensing::RefreshHandle`: dropping it leaves the
+/// loop running, so [`stop`](Self::stop) is the only way to actually halt
+/// it — used by `run_daemon`'s shutdown path (see that call site's doc for
+/// why stopping this *before* the otel flush attempt matters).
+struct SelfProtectLoopHandle {
+    cancel: CancellationToken,
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl SelfProtectLoopHandle {
+    /// Signals the loop to stop and waits for its task to actually exit.
+    async fn stop(self) {
+        self.cancel.cancel();
+        let _ = self.task.await;
+    }
+}
+
+/// Spawns the armed self-protection loop: `tokio::time::interval`'s first
+/// tick fires immediately, so the first
+/// `penguin_selfprotect::scan_heal_report` cycle runs right at arm time,
+/// then again every [`SELFPROTECT_SCAN_INTERVAL`] until
+/// [`SelfProtectLoopHandle::stop`] is called.
+///
+/// Each cycle checks the manifest at [`SELFPROTECT_MANIFEST_PATH`] against
+/// [`SELFPROTECT_ROOT`], heals any finding from [`SELFPROTECT_PROTECTED_DIR`],
+/// reports it to [`NoopConsoleSink`] (see that type's doc — SP2 provisions
+/// the real console-backed sink), and emits every returned `TamperEvent` to
+/// `otel` (a `selfprotect_tamper_total` counter plus a warn-level log).
+///
+/// Never crashes the daemon: `scan_heal_report` already catches every
+/// fallible step inside one cycle (manifest load, signature verification,
+/// heal — see that function's doc), and this loop adds no further fallible
+/// work of its own.
+fn spawn_selfprotect_loop(
+    node_id: String,
+    otel: Arc<dyn ModuleTelemetry>,
+) -> SelfProtectLoopHandle {
+    let cancel = CancellationToken::new();
+    let loop_cancel = cancel.clone();
+    let task = tokio::spawn(async move {
+        let source = LocalFileSource {
+            path: PathBuf::from(SELFPROTECT_MANIFEST_PATH),
+        };
+        let root = Path::new(SELFPROTECT_ROOT);
+        let protected_dir = Path::new(SELFPROTECT_PROTECTED_DIR);
+        let mut ticker = tokio::time::interval(SELFPROTECT_SCAN_INTERVAL);
+
+        loop {
+            tokio::select! {
+                _ = ticker.tick() => {
+                    run_selfprotect_cycle(&source, root, protected_dir, &node_id, &otel);
+                }
+                _ = loop_cancel.cancelled() => {
+                    tracing::info!("selfprotect: integrity loop stopped");
+                    break;
+                }
+            }
+        }
+    });
+    SelfProtectLoopHandle { cancel, task }
+}
+
+/// Runs one `penguin_selfprotect::scan_heal_report` cycle — timestamped with
+/// the current wall-clock time, never inside `scan_heal_report` itself, so
+/// that function stays pure and deterministic for tests — and emits every
+/// returned `TamperEvent` to `otel`: a `selfprotect_tamper_total` counter
+/// increment tagged with the event's kind, plus a warn-level log naming the
+/// path and kind.
+fn run_selfprotect_cycle(
+    source: &dyn ManifestSource,
+    root: &Path,
+    protected_dir: &Path,
+    node_id: &str,
+    otel: &Arc<dyn ModuleTelemetry>,
+) {
+    // A clock set before the Unix epoch is never expected in practice; the
+    // `unwrap_or(0)` fallback exists so a broken system clock degrades this
+    // cycle's timestamp rather than panicking the daemon.
+    let ts_unix = std::time::SystemTime::now()
+        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs() as i64)
+        .unwrap_or(0);
+
+    let events = scan_heal_report(
+        source,
+        SELFPROTECT_PUBKEY,
+        root,
+        protected_dir,
+        node_id,
+        ts_unix,
+        &NoopConsoleSink,
+    );
+
+    for event in events {
+        let kind = format!("{:?}", event.kind);
+        otel.counter_add("selfprotect_tamper_total", 1, &[("kind", kind.as_str())]);
+        otel.emit_log(
+            LogLevel::Warn,
+            "selfprotect: tamper detected and healed",
+            &[("path", event.path.as_str()), ("kind", kind.as_str())],
+        );
+    }
 }
 
 /// Creates `path` (and any missing parents) with mode `0700` if it does not
@@ -367,6 +690,39 @@ fn self_uid() -> u32 {
     nix::unistd::Uid::current().as_raw()
 }
 
+/// Best-effort spawn of `penguind watchdog` — the daemon-keeps-watchdog-
+/// alive half of mutual supervision (see `crate::watchdog`'s module doc for
+/// the full picture, including how the watchdog side guards against
+/// accumulating a duplicate on every crash-restart cycle). Logs and returns
+/// on any failure; never treated as fatal to daemon startup — an endpoint
+/// agent that failed to start because its self-protection helper couldn't
+/// spawn would be strictly worse than one that starts without it.
+///
+/// Only ever called from `run_daemon`'s `selfprotect_armed` branch — the
+/// watchdog peer is part of the flag-gated self-protection subsystem (spec
+/// §4.1), so it must never spawn unconditionally. This does not affect the
+/// systemd unit's own `Restart=always`, which stays unconditional
+/// regardless of arming (see `packaging/systemd/penguind.service`) — that
+/// directive is the OS supervising this process, not this in-process
+/// watchdog peer.
+fn spawn_watchdog_peer() {
+    let exe = match env::current_exe() {
+        Ok(exe) => exe,
+        Err(err) => {
+            tracing::warn!(
+                error = %err,
+                "failed to resolve own executable path; watchdog peer not started"
+            );
+            return;
+        }
+    };
+
+    match std::process::Command::new(exe).arg("watchdog").spawn() {
+        Ok(_child) => tracing::info!("spawned watchdog peer"),
+        Err(err) => tracing::warn!(error = %err, "failed to spawn watchdog peer"),
+    }
+}
+
 /// Resolves once SIGINT or SIGTERM arrives, driving
 /// `Server::serve_with_incoming_shutdown`'s graceful drain.
 async fn wait_for_shutdown_signal() {
@@ -382,5 +738,38 @@ async fn wait_for_shutdown_signal() {
     tokio::select! {
         _ = sigint.recv() => tracing::info!(signal = "SIGINT", "received shutdown signal"),
         _ = sigterm.recv() => tracing::info!(signal = "SIGTERM", "received shutdown signal"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Finding 1 regression: `run_daemon` gates both the integrity loop and
+    /// `spawn_watchdog_peer` on the exact same `selfprotect_armed` value —
+    /// `is_armed(enrolled, flag_on)` — never spawning the watchdog peer
+    /// unconditionally. `run_daemon` itself can't be driven directly in a
+    /// unit test (it builds a real gRPC server, secret store, and license
+    /// client), so this pins down the arming decision those two call sites
+    /// share, matching `penguin_selfprotect::state`'s own
+    /// `armed_only_when_enrolled_and_flag_on` test.
+    #[test]
+    fn watchdog_and_integrity_loop_share_the_same_arming_gate() {
+        assert!(
+            is_armed(true, true),
+            "enrolled + flag on → both integrity loop and watchdog peer must arm"
+        );
+        assert!(
+            !is_armed(false, true),
+            "unenrolled → neither the integrity loop nor the watchdog peer may spawn"
+        );
+        assert!(
+            !is_armed(true, false),
+            "flag off → neither the integrity loop nor the watchdog peer may spawn"
+        );
+        assert!(
+            !is_armed(false, false),
+            "neither enrolled nor flagged on → neither may spawn"
+        );
     }
 }

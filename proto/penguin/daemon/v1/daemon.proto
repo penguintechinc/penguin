@@ -64,9 +64,22 @@ message ModuleStatus {
   string health_message = 5;
   int64 checked_at_unix_nano = 6;
 }
+message OtelStatus {
+  bool enabled = 1;
+  string endpoint = 2;
+  string kind = 3;    // "otel" when exporting, "noop" when disabled
+}
+message FleetDmStatus {
+  bool   fleetd_present = 1;
+  string fleetd_version = 2;    // meaningful only when fleetd_present is true
+  bool   osqueryd_present = 3;
+  string osqueryd_version = 4;  // meaningful only when osqueryd_present is true
+}
 message GetStatusResponse {
   string daemon_version = 1;
   repeated ModuleStatus modules = 2;
+  OtelStatus otel = 3;
+  FleetDmStatus fleet_dm = 4;
 }
 
 message ListCommandsRequest { string api_version = 1; }

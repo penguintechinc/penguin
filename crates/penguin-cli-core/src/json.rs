@@ -130,6 +130,36 @@ pub fn status_json(response: &pb::GetStatusResponse) -> String {
     text
 }
 
+/// Mirrors `OtelStatus`'s JSON shape (`daemon.proto`'s `OtelStatus`).
+#[derive(Serialize)]
+struct OtelStatusJson {
+    enabled: bool,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    endpoint: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    kind: String,
+}
+
+impl From<&pb::OtelStatus> for OtelStatusJson {
+    fn from(otel: &pb::OtelStatus) -> OtelStatusJson {
+        OtelStatusJson {
+            enabled: otel.enabled,
+            endpoint: otel.endpoint.clone(),
+            kind: otel.kind.clone(),
+        }
+    }
+}
+
+/// Renders `penguin otel status --json`'s output, matching the same
+/// pretty-printed-plus-trailing-newline convention as [`modules_json`] and
+/// [`status_json`].
+pub fn otel_status_json(otel: &pb::OtelStatus) -> String {
+    let payload = OtelStatusJson::from(otel);
+    let mut text = serde_json::to_string_pretty(&payload).unwrap_or_default();
+    text.push('\n');
+    text
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -184,11 +214,40 @@ mod tests {
                 health_message: String::new(),
                 checked_at_unix_nano: 0,
             }],
+            otel: None,
+            fleet_dm: None,
         };
         let text = status_json(&response);
         assert!(text.contains("\"daemon_version\": \"0.2.0\""));
         assert!(!text.contains("detail"));
         assert!(!text.contains("checked_at_unix_nano"));
         assert!(!text.contains("health_message"));
+    }
+
+    #[test]
+    fn otel_status_json_includes_enabled_endpoint_and_kind() {
+        let otel = pb::OtelStatus {
+            enabled: true,
+            endpoint: "http://localhost:4318".to_string(),
+            kind: "otel".to_string(),
+        };
+        let text = otel_status_json(&otel);
+        assert!(text.contains("\"enabled\": true"));
+        assert!(text.contains("\"endpoint\": \"http://localhost:4318\""));
+        assert!(text.contains("\"kind\": \"otel\""));
+        assert!(text.ends_with('\n'));
+    }
+
+    #[test]
+    fn otel_status_json_omits_empty_endpoint_when_disabled() {
+        let otel = pb::OtelStatus {
+            enabled: false,
+            endpoint: String::new(),
+            kind: "noop".to_string(),
+        };
+        let text = otel_status_json(&otel);
+        assert!(text.contains("\"enabled\": false"));
+        assert!(!text.contains("endpoint"));
+        assert!(text.contains("\"kind\": \"noop\""));
     }
 }

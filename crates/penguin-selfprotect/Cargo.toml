@@ -1,0 +1,46 @@
+[package]
+name = "penguin-selfprotect"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+# Argon2id password hashing for the tamper-protection secret (see
+# `authz.rs`): `hash_secret` produces a PHC string via `Argon2::default()`
+# (Argon2id, OWASP-recommended default params), `verify_secret` parses and
+# checks it. Risk-bearing crypto crate — exact pin.
+# "std" is required so `password-hash`'s re-exported `rand_core::OsRng`
+# is actually compiled in (`OsRng` is itself gated behind rand_core's own
+# `getrandom` feature, which `password-hash`'s `std` feature enables).
+argon2 = { version = "=0.5.3", features = ["std"] }
+# Minisign signature verification for the IntegrityManifest — the same
+# verify-only wrapper penguin-update's release archives go through. See
+# that crate's `verify.rs` doc for why minisign and why verify-only.
+penguin-update.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+# SHA-256 hashing for integrity checks of on-disk files. Pure Rust, no C
+# dependency — same pin and reasoning as penguin-module-waddlebot's obs-adapter.
+sha2.workspace = true
+# Structured logging for `monitor.rs`'s `scan_heal_report`: a failed
+# manifest load/verification or heal attempt is logged and safely no-opped,
+# never panicked on — same convention as penguin-licensing/penguin-update's
+# own `tracing::debug!`/`tracing::warn!` use in their fallback paths.
+tracing.workspace = true
+
+[dev-dependencies]
+# Test-only minisign *signing*: generates an ephemeral keypair and signs a
+# fixture manifest in-test — same pin and same reasoning as
+# penguin-update's own dev-dependency of this crate (see that crate's
+# Cargo.toml comment): `minisign-verify` is verify-only by design, so it
+# cannot produce a signature for the tamper-rejection test.
+minisign = "=0.9.1"
+# Temporary directories for integrity check tests with real files on disk.
+tempfile = "3"

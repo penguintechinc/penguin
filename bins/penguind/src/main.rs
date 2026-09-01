@@ -10,6 +10,7 @@ mod host_wiring;
 #[cfg(unix)]
 mod logging;
 mod service;
+mod watchdog;
 
 use std::process::ExitCode;
 
@@ -31,6 +32,15 @@ fn main() -> ExitCode {
     if is_version_request(&args) {
         println!("{VERSION}");
         return ExitCode::SUCCESS;
+    }
+
+    // `penguind watchdog` is a distinct top-level subcommand (the mutual-
+    // supervision peer process — see `watchdog`'s module doc), not a
+    // `service` verb: dispatched here, before `service` and before any
+    // config/lock loading, the same "must work standalone" positioning as
+    // the version check above.
+    if args.first().map(String::as_str) == Some("watchdog") {
+        return watchdog::run_watchdog();
     }
 
     // Handle `service` subcommands (install, uninstall, start, stop,
