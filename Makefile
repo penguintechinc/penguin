@@ -1,103 +1,192 @@
-# penguin — PenguinTech unified endpoint agent
-# `make help` lists targets. CI builds run in golang:1.25-bookworm for parity.
+# Build front-end for the Rust workspace.
+#
+# Target names deliberately mirror the frozen Go client's Makefile so muscle
+# memory and CI scripts carry over. Every target runs cargo directly, which is
+# correct inside CI (the job already runs in the pinned Rust container).
+#
+# On a workstation, builds must NOT run on the host — prefix any target with
+# `docker-` to run it inside the pinned image instead:
+#
+#     make docker-test      # == `make test`, inside penguin-rust:1.97
+#
+# The container needs protoc (tonic-prost-build shells out to it), which the
+# stock rust image lacks; `make docker-image` builds the derived image.
 
-MODULE      := github.com/penguintechinc/penguin
-VERSION     := $(shell cat .version)
-LDFLAGS     := -ldflags "-s -w -X $(MODULE)/internal/version.Version=$(VERSION)"
-GO_IMAGE    := golang:1.25-bookworm
-BINARIES    := penguin penguind penguin-tray
-COVER_MIN   := 90
+CARGO ?= cargo
+DOCKER_IMAGE ?= penguin-rust:1.97
+RUST_VERSION ?= 1.97
 
-.DEFAULT_GOAL := help
+# Unit-coverage floor, matching the Go client's gate.
+COVER_MIN ?= 90
 
-.PHONY: help
-help: ## Show this help
-	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-22s\033[0m %s\n", $$1, $$2}'
+# Excluded from BOTH coverage tiers: generated code, binaries, examples, and the
+# integration-test harnesses themselves.
+COVER_EXCLUDE_ALWAYS := (crates/penguin-proto/|bins/|examples/|/tests/)
 
-## ---- Build ----
+# Excluded from the UNIT tier only: zero-logic OS boundary adapters, isolated
+# into their own files precisely so they can be excluded honestly. The
+# integration tier puts them back.
+#
+# The go-plugin host's process/socket orchestration is excluded for the same
+# reason the Go build excluded internal/extplugin/client.go from its unit gate:
+# spawning a child process and completing a TLS handshake over a unix socket
+# cannot be unit-tested, and pretending otherwise with mocks would test the mock.
+# These files are covered for real by the goplugin_compat integration tests,
+# which drive an actual Go-built plugin binary.
+# penguin-sdk/src/plugin/* is the go-plugin SERVER side — process stdout
+# handshake emission, TLS listener, gRPC serving, broker dial. Same argument as
+# the host side above: it is exercised for real by the hostservice_roundtrip and
+# reverse-compat integration tests, which run an actual plugin binary against an
+# actual host. Its pure parts (mtls, handshake) stay in the unit tier.
+#
+# penguin-module-tobogganing/src/wireguard/kernel.rs is the same precedent
+# again: every method body is a netlink call (create/configure/read/remove a
+# real interface) that cannot execute without root and a real interface, and
+# mocking the netlink layer would only test the mock. It is covered for real
+# by the privileged netns gate (integration tier), not here.
+#
+# penguin-module-tobogganing/src/testutil.rs is test-only double/mock-server
+# code (`#[cfg(test)] mod testutil;` in that crate's lib.rs — it never ships
+# in the built module), the same category as the already-excluded
+# `/tests/` integration-harness directories.
+#
+# penguin-secrets/src/platform_backend.rs is the OS keyring adapter (Windows
+# Credential Manager, macOS Keychain, Linux Secret Service via the `keyring`
+# crate). Every public method either constructs a `keyring::Entry` or drives
+# one through `spawn_blocking` — there is no real desktop keyring in CI, and
+# exercising one here would mean either a real credential prompt (forbidden)
+# or mocking the `keyring` crate itself, which would only test the mock.
+# `Backend::FileOnly` is the only backend any test in this crate selects.
+#
+# penguin-update/src/updater.rs is the network-fetch + archive-download +
+# `self_replace` orchestration boundary — GitHub release fetch, asset
+# download, and swapping the running executable's own binary out from under
+# it. None of that can run in CI (no network, and self-replacing the test
+# binary mid-suite is exactly the kind of host mutation these gates forbid).
+# Its pure decisions — OS/arch mapping, asset selection, archive extraction,
+# minisign verification — are factored out into
+# penguin-update/src/{platform,release,archive,verify}.rs, which stay in the
+# unit tier and are fully tested there. The one pure branch left in
+# updater.rs itself (apply()'s no-verification-key fail-closed short-circuit,
+# which runs before any network call) is still unit-tested in this file.
+#
+# penguin-desktop-core/src/ipc_dial.rs is the platform-specific socket dial
+# wrapper (Unix UDS, Windows named pipe). Unit tests cannot spawn a real penguind
+# daemon, so the dial call cannot be exercised in the unit tier. The connect flow
+# that calls dial_unix is exercised for real in integration tests that do have a
+# real daemon. Excluding this boundary file allows the crate's real logic
+# (proxy_request, set_user_session, oauth, token_store) to stay in the unit tier.
+COVER_EXCLUDE_BOUNDARY := (penguin-ipc/src/(listen|dial)_(unix|windows)\.rs|penguin-ipc/src/groups_unix\.rs|penguin-goplugin-host/src/(client|broker|stdio|controller)\.rs|penguin-sdk/src/plugin/(serve|broker|hostservices|services|tls_incoming)\.rs|penguin-module-tobogganing/src/wireguard/kernel\.rs|penguin-module-tobogganing/src/testutil\.rs|penguin-secrets/src/platform_backend\.rs|penguin-update/src/updater\.rs|penguin-desktop-core/src/ipc_dial\.rs)
 
-.PHONY: build
-build: ## Build all binaries into ./bin
-	@mkdir -p bin
-	@for b in $(BINARIES); do go build $(LDFLAGS) -o bin/$$b ./cmd/$$b || exit 1; done
+COVER_IGNORE_UNIT := $(COVER_EXCLUDE_ALWAYS)|$(COVER_EXCLUDE_BOUNDARY)
+COVER_IGNORE_INT := $(COVER_EXCLUDE_ALWAYS)
 
-.PHONY: build-docker
-build-docker: ## Build all binaries inside golang:1.25-bookworm (CI parity)
-	docker run --rm -v $(PWD):/src -w /src -e GOFLAGS=-buildvcs=false $(GO_IMAGE) make build
+.PHONY: help setup build test test-unit test-integration test-integration-cover \
+        lint format test-security smoke-test clean proto \
+        pre-commit parity docker-image docker-volumes tools install-hooks verify-hooks
 
-.PHONY: proto
-proto: ## Regenerate gRPC code from api/proto and pkg/sdk/proto
-	@command -v protoc >/dev/null || { echo "protoc not found"; exit 1; }
-	protoc --go_out=. --go_opt=module=$(MODULE) \
-	       --go-grpc_out=. --go-grpc_opt=module=$(MODULE) \
-	       $(shell find api/proto pkg/sdk/proto -name '*.proto' 2>/dev/null)
+help: ## Show available targets
+	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
+		| awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-24s\033[0m %s\n", $$1, $$2}'
 
-## ---- Quality ----
+setup: tools install-hooks ## Bootstrap local dev environment (cargo subcommands + git hooks)
 
-.PHONY: lint
-lint: ## golangci-lint (staticcheck, gosec, errcheck, unused)
-	golangci-lint run ./...
+install-hooks: ## Install the pre-commit framework and register pre-commit + pre-push hooks
+	@./scripts/install-pre-commit.sh
 
-.PHONY: format
-format: ## gofmt + goimports
-	gofmt -w .
-	@command -v goimports >/dev/null && goimports -w . || true
+verify-hooks: ## Report whether pre-commit/pre-push hooks are installed and non-empty
+	@./scripts/install-pre-commit.sh --verify
 
-.PHONY: test
-test: test-unit ## All tests
+build: ## Build every crate and binary
+	$(CARGO) build --workspace --locked
 
-# ---- Coverage exclusion sets (see docs/APP_STANDARDS.md "Coverage policy") ----
-# ALWAYS excluded from every gate — generated code or zero-logic OS/framework
-# adapters isolated into dedicated files (see docs/APP_STANDARDS.md):
-#   *.pb.go                        generated gRPC/protobuf
-#   cmd/                           thin main() wiring (exercised by smoke-test + E2E)
-#   examples/                      reference plugin, not shipped product code
-#   plugin_glue.go                 go-plugin framework boilerplate (needs plugin runtime)
-#   vpn_wgctrl.go                  kernel WireGuard adapter (needs the wireguard kmod)
-#   sysresolver_resolvectl_linux.go systemd-resolved/resolvectl exec adapter
-COVER_EXCLUDE_ALWAYS := \.pb\.go:|/cmd/|/examples/|/plugin_glue\.go:|/vpn_wgctrl\.go:|/sysresolver_resolvectl_linux\.go:
-# Excluded from the UNIT gate only — the subprocess/socket orchestration a
-# unit-test process cannot reach (real SO_PEERCRED handshake, real plugin
-# subprocess launch). The integration gate (-tags=integration, privileged CI)
-# exercises these against real peers/subprocesses and counts them.
-COVER_EXCLUDE_BOUNDARY := internal/ipc/(dial|listen)_unix|internal/extplugin/client\.go:
+test: test-unit ## Run the enforced test gate (unit + coverage floor)
 
-.PHONY: test-unit
-test-unit: ## Unit tests: race + coverage gate on logic (boundary excluded — see integration gate)
-	go test -race -coverprofile=coverage.out -covermode=atomic ./...
-	@grep -vE '$(COVER_EXCLUDE_ALWAYS)|$(COVER_EXCLUDE_BOUNDARY)' coverage.out > coverage.unit.out
-	@go tool cover -func=coverage.unit.out | awk '/^total:/ {gsub(/%/,"",$$3); if ($$3+0 < $(COVER_MIN)) {printf "unit coverage %.1f%% below $(COVER_MIN)%% threshold\n", $$3; exit 1} else printf "unit coverage %.1f%% (>= $(COVER_MIN)%%)\n", $$3}'
+tools: ## Install the cargo subcommands the gates need (cached in CARGO_HOME)
+	@command -v cargo-llvm-cov >/dev/null 2>&1 || $(CARGO) install cargo-llvm-cov --locked
+	@command -v cargo-deny >/dev/null 2>&1 || $(CARGO) install cargo-deny --locked
+	@command -v cargo-audit >/dev/null 2>&1 || $(CARGO) install cargo-audit --locked
 
-.PHONY: test-integration
-test-integration: ## Integration tests (Linux netns / real subprocess; root-gated tests self-skip if unprivileged)
-	go test -race -tags=integration ./...
+test-unit: tools ## Unit tests with the $(COVER_MIN)% line-coverage gate
+	$(CARGO) llvm-cov --workspace --locked \
+		--ignore-filename-regex '$(COVER_IGNORE_UNIT)' \
+		--fail-under-lines $(COVER_MIN)
 
-.PHONY: test-integration-cover
-test-integration-cover: ## Report combined unit+integration coverage (boundary INCLUDED; informational — the enforced gate is `make test`)
-	go test -race -tags=integration -coverprofile=coverage.int.out -covermode=atomic ./...
-	@grep -vE '$(COVER_EXCLUDE_ALWAYS)' coverage.int.out > coverage.intfiltered.out
-	@go tool cover -func=coverage.intfiltered.out | awk '/^total:/ {printf "combined unit+integration coverage (boundary included): %s\n", $$3}'
+test-integration: ## Integration tests (marked #[ignore], need PENGUIN_INTEGRATION=1)
+	PENGUIN_INTEGRATION=1 $(CARGO) test --workspace --locked -- --ignored
 
-.PHONY: smoke-test
-smoke-test: build ## Build + version smoke check on all binaries
-	@for b in $(BINARIES); do ./bin/$$b version | grep -q "$(VERSION)" || { echo "$$b version mismatch"; exit 1; }; done
-	@echo "smoke-test OK"
+test-integration-cover: tools ## Combined unit+integration coverage (informational only)
+	PENGUIN_INTEGRATION=1 $(CARGO) llvm-cov --workspace --locked --include-ignored \
+		--ignore-filename-regex '$(COVER_IGNORE_INT)' \
+		--summary-only
 
-.PHONY: test-security
-test-security: ## Security scans (gosec, govulncheck, gitleaks)
-	@command -v gosec >/dev/null && gosec -exclude-generated ./... || echo "gosec not installed — skipping (CI enforces)"
-	@command -v govulncheck >/dev/null && govulncheck ./... || echo "govulncheck not installed — skipping (CI enforces)"
-	@command -v gitleaks >/dev/null && gitleaks protect --no-banner || echo "gitleaks not installed — skipping (CI enforces)"
+lint: ## Formatting + clippy (warnings are errors)
+	$(CARGO) fmt --all --check
+	$(CARGO) clippy --workspace --all-targets --locked -- -D warnings
 
-.PHONY: pre-commit
-pre-commit: lint test-security build smoke-test test ## Full pre-commit gate
+format: ## Apply rustfmt
+	$(CARGO) fmt --all
 
-## ---- Housekeeping ----
+test-security: tools ## Supply-chain and advisory scans
+	$(CARGO) deny check
+	$(CARGO) audit
 
-.PHONY: clean
+smoke-test: build ## Build, then check each binary answers --version
+	@for bin in penguind pdcli penguin-tray; do \
+		if [ -x target/debug/$$bin ]; then \
+			echo "smoke: $$bin"; target/debug/$$bin --version >/dev/null || exit 1; \
+		else \
+			echo "smoke: $$bin not built yet, skipping"; \
+		fi; \
+	done
+
+proto: ## Regenerate protobuf bindings (build.rs does this; forces a rebuild)
+	$(CARGO) clean -p penguin-proto
+	$(CARGO) build -p penguin-proto --locked
+
+# The M8 parity harness. run.sh builds the Rust binaries + the raw wire probe
+# itself and runs every gating gate (dims 1,2,3,5,6 + the metrics test); the
+# Go-dependent gates self-skip when the Go toolchain is absent (e.g. inside the
+# Rust-only image), so `make docker-parity` proves the Rust side and script
+# correctness, while CI's parity.yml runs the full cross-impl comparison with
+# both toolchains present. perf (dim 7) is informational and not run here.
+parity: ## Run the M8 parity harness (build + all gating parity gates)
+	scripts/parity/run.sh
+
+pre-commit: lint test test-security ## Everything that must pass before a commit
+
 clean: ## Remove build artifacts
-	rm -rf bin coverage.out coverage.unit.out coverage.int.out coverage.intfiltered.out
+	$(CARGO) clean
 
-.PHONY: version-show
-version-show: ## Print current version
-	@echo $(VERSION)
+# libprotobuf-dev is required alongside protobuf-compiler: it supplies the
+# well-known types (google/protobuf/empty.proto) that the vendored go-plugin
+# grpc_stdio.proto imports. Without it the build fails on that import.
+docker-image: ## Build the pinned Rust image (adds protoc, which rust:$(RUST_VERSION) lacks)
+	@printf 'FROM rust:$(RUST_VERSION)-bookworm\nRUN apt-get update \
+&& apt-get install -y --no-install-recommends protobuf-compiler libprotobuf-dev \
+&& rm -rf /var/lib/apt/lists/*\n' | docker build -t $(DOCKER_IMAGE) -
+
+# `make docker-<target>` runs <target> inside the pinned image. Cargo's home and
+# target dirs live in named volumes so they persist across runs and never land
+# in the repo.
+# Docker auto-creates a named volume's root as root:root, which then blocks the
+# --user container from writing into it. Creating and chowning them up front is
+# idempotent and cheap, and turns a confusing mid-build permission error into a
+# non-event.
+docker-volumes:
+	@docker volume create penguin_cargo_home >/dev/null
+	@docker volume create penguin_target_make >/dev/null
+	@docker run --rm -v penguin_cargo_home:/cargo -v penguin_target_make:/target \
+		busybox chown -R $(shell id -u):$(shell id -g) /cargo /target
+
+# --user is not optional: without it every file the container writes (Cargo.lock,
+# target/, built binaries) lands root-owned in the working tree, which then needs
+# root to clean up.
+docker-%: docker-image docker-volumes
+	docker run --rm \
+		--user $(shell id -u):$(shell id -g) \
+		-v $(CURDIR):/work -w /work \
+		-v penguin_cargo_home:/cargo -e CARGO_HOME=/cargo \
+		-v penguin_target_make:/target -e CARGO_TARGET_DIR=/target \
+		-e PATH=/cargo/bin:/usr/local/cargo/bin:/usr/local/bin:/usr/bin:/bin \
+		$(DOCKER_IMAGE) make $*

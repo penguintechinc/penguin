@@ -1,0 +1,32 @@
+[package]
+name = "penguin-module-skauswatch"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+async-trait.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde-norway.workspace = true
+prometheus.workspace = true
+penguin-sdk.workspace = true
+skauswatch-client.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+jsonschema.workspace = true
+# `#[tokio::test(start_paused = true)]` for the lifecycle test — house style
+# per `skauswatch-client`/`squawk-client`/`waddlebot-client`'s identical
+# dev-only `test-util` addition; `[dependencies]`'s plain `tokio.workspace =
+# true` above stays untouched so production code gets no test-only surface.
+tokio = { workspace = true, features = ["test-util"] }

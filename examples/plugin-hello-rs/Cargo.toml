@@ -1,0 +1,28 @@
+[package]
+name = "plugin-hello-rs"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+penguin-sdk.workspace = true
+async-trait.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+# Reverse-callback proof (Part 3.1): drives this plugin with the real Rust
+# host so the HostService round trip can be asserted end to end. A path
+# dependency (not `workspace = true`) so the cycle stays confined to dev-only
+# test builds of this example and never touches the root workspace manifest
+# or penguin-goplugin-host's own manifest — see `tests/hostservice_roundtrip.rs`.
+penguin-goplugin-host = { path = "../../crates/penguin-goplugin-host" }
+penguin-proto.workspace = true
+tokio.workspace = true
+tonic.workspace = true

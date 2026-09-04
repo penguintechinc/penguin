@@ -1,8 +1,38 @@
-# Tray release: build penguin-tray with cgo (systray needs objc on macOS, the
-# X11/AppIndicator C libs on Linux, and the Win32 API on Windows). Because cgo
-# cross-compilation needs a matching C toolchain, each target builds on a
-# NATIVE-architecture runner — never GOARCH cross with CGO_ENABLED=1. Uploaded as
-# release assets on version tags. Actions pinned to commit SHAs per policy.
+# Tray release: build penguin-tray (Rust) per-OS and upload as a raw
+# executable release asset, matching go-client's naming convention
+# (penguin-tray_<version>_<os>_<arch>[.exe] — NOT the penguin_<version>_<os>_
+# <arch> archive name release.yml produces, and not archived at all; see
+# packaging/README.md for why tray stays on its own naming scheme).
+#
+# Retargeted from Go: the Go build needed cgo (systray via objc on macOS, the
+# X11/AppIndicator C libs on Linux, Win32 on Windows) and therefore a NATIVE
+# C toolchain per target, never GOARCH cross with CGO_ENABLED=1. The Rust
+# port uses ksni on Linux — pure Rust, no GTK/appindicator system libraries —
+# so the `libgtk-3-dev`/`libayatana-appindicator3-dev` apt step Go had is
+# dropped entirely. Kept on native-architecture runners anyway (rather than
+# switching to `cross` for linux/arm64, which the milestone brief flagged as
+# an option now that cgo is gone): penguin-tray talks gRPC to penguind
+# (go-client/cmd/penguin-tray/main.go imports the daemon.v1 proto + internal/
+# ipc client, and the Rust port is expected to depend on penguin-proto /
+# penguin-ipc the same way), so it very likely still needs protoc at build
+# time — and `cross`'s Docker images don't ship protoc, the exact problem
+# release.yml's own header comment documents avoiding for the same reason.
+# Native runners sidestep it uniformly across both workflows.
+#
+# Unlike Go's original (unsigned) tray uploads, this workflow also
+# minisign-signs the binary — a deliberate improvement, not parity, since the
+# rest of this pipeline (release.yml) now signs every artifact and there is
+# no reason tray should be the one unsigned exception.
+#
+# windows/arm64 is intentionally not built here, matching Go's own documented
+# gap (no stable native hosted runner) — unlike release.yml's penguind/
+# penguin, which cross-links windows/arm64 from windows-latest because that
+# leg has no cgo/GUI-toolkit dependency to worry about; penguin-tray's own
+# platform tray integration crate has not landed yet (bins/penguin-tray's
+# Cargo.toml is still WIP as of this workflow), so cross-linking it is not
+# asserted safe here.
+#
+# Actions pinned to commit SHAs per policy.
 name: Release Tray
 
 on:
@@ -11,69 +41,134 @@ on:
       - 'v*'
 
 permissions:
-  contents: write
+  contents: read
+
+env:
+  # Same protoc pin and rationale as release.yml — see that file's header
+  # comment for why the official release zip (not apt/brew) is used.
+  PROTOC_VERSION: '35.1'
 
 jobs:
   build-tray:
+    permissions:
+      contents: write # gh release upload, per matrix leg (no separate finalize job here)
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest        # native amd64
-            goos: linux
-            goarch: amd64
-            ext: ''
-          - os: ubuntu-24.04-arm     # native arm64 hosted runner
-            goos: linux
-            goarch: arm64
-            ext: ''
-          - os: macos-13             # native Intel runner
-            goos: darwin
-            goarch: amd64
-            ext: ''
-          - os: macos-latest         # native Apple-silicon runner
-            goos: darwin
-            goarch: arm64
-            ext: ''
-          - os: windows-latest       # native amd64
-            goos: windows
-            goarch: amd64
-            ext: '.exe'
-          # windows/arm64: no stable native hosted runner yet — add windows-11-arm
-          # here once it leaves preview (cgo cross from amd64 will not link).
-    runs-on: ${{ matrix.os }}
+          - runner: ubuntu-latest        # native amd64
+            target: x86_64-unknown-linux-gnu
+            asset_os: linux
+            asset_arch: amd64
+            exe_ext: ''
+            protoc_zip: protoc-35.1-linux-x86_64.zip
+            protoc_sha256: 6930ebf62bd4ea607b98fff052596c6ee564b9835b4ce172c75a3f53ae9d91b7
+          - runner: ubuntu-24.04-arm     # native arm64 hosted runner
+            target: aarch64-unknown-linux-gnu
+            asset_os: linux
+            asset_arch: arm64
+            exe_ext: ''
+            protoc_zip: protoc-35.1-linux-aarch_64.zip
+            protoc_sha256: 01bf9d08808c7f96678b63f4bd8efa559bb4f83d5a7a270d5edaf507f9d5d9cf
+          - runner: macos-15-intel       # native Intel runner (macos-13 is retired; see release.yml's header comment)
+            target: x86_64-apple-darwin
+            asset_os: darwin
+            asset_arch: amd64
+            exe_ext: ''
+            protoc_zip: protoc-35.1-osx-universal_binary.zip
+            protoc_sha256: 9c27aebb44c537f5627cc13c9c1c6bc0e34ecfefc6e4d79b19764afb8302d95b
+          - runner: macos-latest         # native Apple-silicon runner
+            target: aarch64-apple-darwin
+            asset_os: darwin
+            asset_arch: arm64
+            exe_ext: ''
+            protoc_zip: protoc-35.1-osx-universal_binary.zip
+            protoc_sha256: 9c27aebb44c537f5627cc13c9c1c6bc0e34ecfefc6e4d79b19764afb8302d95b
+          - runner: windows-latest       # native amd64
+            target: x86_64-pc-windows-msvc
+            asset_os: windows
+            asset_arch: amd64
+            exe_ext: '.exe'
+            protoc_zip: protoc-35.1-win64.zip
+            protoc_sha256: 5d3ff218d7d91eea95f7569bcb5a98f3030f8996d44151279d9772edcff76082
+          # windows/arm64: no stable native hosted runner yet, and cross-linking
+          # is not asserted safe for tray's still-WIP platform integration —
+          # see the job-level comment above.
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+      - name: Install Rust (matches rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master
         with:
-          go-version: '1.25'
+          toolchain: '1.97.0'
+          targets: ${{ matrix.target }}
 
-      - name: Linux systray build deps
-        if: matrix.goos == 'linux'
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libgtk-3-dev libayatana-appindicator3-dev
-
-      - name: Extract version from tag
-        id: version
-        run: echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+      - name: Install protoc ${{ env.PROTOC_VERSION }}
         shell: bash
-
-      - name: Build penguin-tray (native cgo)
         run: |
-          out="penguin-tray_${{ steps.version.outputs.tag }}_${{ matrix.goos }}_${{ matrix.goarch }}${{ matrix.ext }}"
-          go build \
-            -tags noxdp \
-            -ldflags "-s -w -X github.com/penguintechinc/penguin/internal/version.Version=${{ steps.version.outputs.tag }}" \
-            -o "$out" \
-            ./cmd/penguin-tray
-          echo "asset=$out" >> "$GITHUB_OUTPUT"
-        id: build
-        env:
-          CGO_ENABLED: 1
-        shell: bash
+          set -euo pipefail
+          curl -sSL -o protoc.zip "https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/${{ matrix.protoc_zip }}"
+          echo "${{ matrix.protoc_sha256 }}  protoc.zip" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/protoc"
+          unzip -q protoc.zip -d "$RUNNER_TEMP/protoc"
+          chmod +x "$RUNNER_TEMP/protoc/bin/protoc"
+          echo "$RUNNER_TEMP/protoc/bin" >> "$GITHUB_PATH"
 
-      - name: Upload release asset
-        run: gh release upload "${{ steps.version.outputs.tag }}" "${{ steps.build.outputs.asset }}" --repo penguintechinc/penguin --clobber
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Compute version + asset filename
+        id: version
         shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "asset=penguin-tray_${version}_${{ matrix.asset_os }}_${{ matrix.asset_arch }}${{ matrix.exe_ext }}" >> "$GITHUB_OUTPUT"
+
+      - name: Build penguin-tray
+        shell: bash
+        run: cargo build --release --locked --target ${{ matrix.target }} -p penguin-tray
+
+      - name: Stage binary under its release name
+        shell: bash
+        run: cp "target/${{ matrix.target }}/release/penguin-tray${{ matrix.exe_ext }}" "${{ steps.version.outputs.asset }}"
+
+      # Every leg builds its own artifact and there's no per-tag checksums
+      # file to aggregate for tray (unlike release.yml's finalize job), so
+      # each leg installs minisign itself and signs immediately after
+      # staging rather than fanning out to a second job. Install path is
+      # OS-specific since there's no single package manager common to all
+      # three: apt (Linux), Homebrew (macOS, `minisign` is a homebrew-core
+      # formula), and a pinned+checksummed direct download (Windows, no
+      # first-party minisign package).
+      - name: Install minisign (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends minisign
+
+      - name: Install minisign (macOS)
+        if: runner.os == 'macOS'
+        run: brew install minisign
+
+      - name: Install minisign (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -sSL -o minisign.zip https://github.com/jedisct1/minisign/releases/download/0.12/minisign-0.12-win64.zip
+          echo "37b600344e20c19314b2e82813db2bfdcc408b77b876f7727889dbd46d539479  minisign.zip" | sha256sum -c -
+          unzip -q minisign.zip -d "$RUNNER_TEMP/minisign"
+          echo "$RUNNER_TEMP/minisign/minisign-win64/x86_64" >> "$GITHUB_PATH"
+
+      - name: minisign the binary
+        shell: bash
+        env:
+          MINISIGN_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+        run: |
+          set -euo pipefail
+          umask 077
+          printf '%s' "$MINISIGN_KEY" | base64 -d > "$RUNNER_TEMP/minisign.key"
+          minisign -S -s "$RUNNER_TEMP/minisign.key" -m "${{ steps.version.outputs.asset }}" -x "${{ steps.version.outputs.asset }}.minisig"
+          shred -u "$RUNNER_TEMP/minisign.key" 2>/dev/null || rm -f "$RUNNER_TEMP/minisign.key"
+
+      - name: Upload release asset(s)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${{ github.ref_name }}" "${{ steps.version.outputs.asset }}"* --repo penguintechinc/penguin --clobber

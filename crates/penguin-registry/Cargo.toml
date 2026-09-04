@@ -1,0 +1,23 @@
+[package]
+name = "penguin-registry"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+# The `Module`/`Factory` contract every built-in registration returns.
+penguin-sdk.workspace = true
+# Not a workspace dependency yet (only added there per-milestone as each
+# crate lands) — referenced by path, same convention used throughout this
+# workspace for freshly-landed crates (see `bins/penguind/Cargo.toml`).
+penguin-module-squawk = { path = "../penguin-module-squawk" }
+penguin-module-tobogganing = { path = "../penguin-module-tobogganing" }
+penguin-module-waddlebot.workspace = true
+penguin-module-waddleai.workspace = true
+penguin-module-skauswatch.workspace = true

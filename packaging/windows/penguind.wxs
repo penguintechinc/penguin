@@ -1,6 +1,14 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  WiX v5 installer for the Penguin Endpoint Agent (penguind daemon + penguin CLI).
+  WiX v5 installer for the Penguin Endpoint Agent (penguind daemon + pdcli CLI),
+  Rust build. Ported from go-client/packaging/windows/penguind.wxs — the
+  directives below match that file line-for-line; only the staging-source
+  comment changed (cargo output, not `go build` output).
+
+  penguin-tray is deliberately NOT included in this MSI, matching the Go
+  reference's decision: tray is still released separately (raw .exe per
+  .github/workflows/release-tray.yml), same as Go shipped it. Revisit once
+  tray has its own Windows startup/service integration story.
 
   Build (must run on Windows — WiX parses/links anywhere, but the MSI Bind phase
   P/Invokes the Windows-only msi.dll, so emitting the .msi requires windows-latest;
@@ -8,8 +16,10 @@
     wix build packaging/windows/penguind.wxs \
       -d Version=<x.y.z> -b <dir-with-exes> -arch x64 -o penguind.msi
 
-  The staging dir passed with -b must contain penguind.exe and penguin.exe
-  (GOOS=windows GOARCH=amd64 CGO_ENABLED=0 builds).
+  The staging dir passed with -b must contain penguind.exe and pdcli.exe:
+  a release-profile `cargo build` for target x86_64-pc-windows-msvc, copied
+  there by the release-windows-msi workflow (not GOOS=windows/CGO_ENABLED=0
+  as the Go build produced them).
 
   TODO(signing): the produced MSI is UNSIGNED. Sign before distribution with:
     signtool.exe sign /fd SHA256 /f cert.pfx /p <pw> /tr <timestamp-url> /td SHA256 penguind.msi
@@ -22,7 +32,11 @@
            UpgradeCode="9A8351D8-A9FC-4FDA-9EAA-AE4ED4369077"
            Scope="perMachine">
 
-    <!-- Block downgrades; MajorUpgrade removes any older version on install. -->
+    <!-- Same UpgradeCode as the frozen Go MSI (go-client/packaging/windows/penguind.wxs)
+         deliberately kept identical: this is a rewrite of the same product, not a
+         new one, so MajorUpgrade below removes a machine's existing Go-built
+         install (or an older Rust one) in place rather than leaving two side by
+         side. -->
     <MajorUpgrade DowngradeErrorMessage="A newer version is already installed." />
 
     <!-- Embed a single cab inside the MSI (no external media). -->
@@ -52,7 +66,7 @@
 
         <!-- CLI: installed to the same directory (no service). -->
         <Component Id="penguin_exe" Bitness="always64">
-          <File Id="penguin_exe" Source="penguin.exe" KeyPath="yes" />
+          <File Id="penguin_exe" Source="pdcli.exe" KeyPath="yes" />
         </Component>
 
       </Directory>

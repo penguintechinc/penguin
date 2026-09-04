@@ -1,90 +1,50 @@
-# PR gate: lint, security scans, and race-tested build in the standard
-# golang:1.25-bookworm toolchain. Actions are pinned to commit SHAs per policy.
+# PR gate for the Rust workspace: format, clippy (warnings = errors), build,
+# tests, and supply-chain (cargo-deny + cargo-audit). Actions pinned to commit
+# SHAs.
 name: CI
 
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [main, "release/**"]
 
 permissions:
   contents: read
 
 jobs:
-  lint:
+  rust:
     runs-on: ubuntu-latest
-    container: golang:1.25-bookworm
+    container: rust:1.97-bookworm
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      - name: golangci-lint
-        # v7+ is required to run golangci-lint v2.x (v6 only supports v1).
-        uses: golangci/golangci-lint-action@9fae48acfc02a90574d7c304a1758ef9895495fa # v7.0.1
-        with:
-          version: v2.12.2
-          args: --timeout=5m
+      - name: protoc
+        # tonic-prost-build (penguin-proto) shells out to protoc at build time;
+        # the base rust image ships neither it nor the well-known types.
+        # libprotobuf-dev provides google/protobuf/*.proto, which the vendored
+        # go-plugin grpc_stdio.proto imports — protobuf-compiler alone is not
+        # enough and fails with a confusing "File not found" on that import.
+        run: apt-get update && apt-get install -y --no-install-recommends protobuf-compiler libprotobuf-dev
+      - name: components
+        run: rustup component add rustfmt clippy
+      - name: fmt
+        run: cargo fmt --all --check
+      - name: clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: build
+        run: cargo build --workspace --locked
+      - name: test
+        run: cargo test --workspace --locked
 
-  test:
+  supply-chain:
     runs-on: ubuntu-latest
-    container: golang:1.25-bookworm
-    env:
-      GOFLAGS: -buildvcs=false
+    container: rust:1.97-bookworm
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      - name: Unit tests (race + coverage gate)
-        run: make test
-
-  security:
-    runs-on: ubuntu-latest
-    container: golang:1.25-bookworm
-    env:
-      GOFLAGS: -buildvcs=false
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      - name: govulncheck
+      - name: cargo-deny (licenses, bans, sources, advisories)
         run: |
-          go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
-          govulncheck ./...
-      - name: gosec
+          cargo install cargo-deny --locked
+          cargo deny check
+      - name: cargo-audit (RustSec advisories)
         run: |
-          go install github.com/securego/gosec/v2/cmd/gosec@v2.22.0
-          gosec -exclude-generated ./...
-
-  build:
-    runs-on: ubuntu-latest
-    container: golang:1.25-bookworm
-    env:
-      GOFLAGS: -buildvcs=false
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      - name: Build all binaries + example plugin
-        run: |
-          make build
-          go build -o /tmp/plugin-hello ./examples/plugin-hello
-      - name: Cross-compile Windows target (pure-Go; catches _windows.go breakage)
-        # penguin-tray is excluded — it needs cgo and is built natively in release-tray.yml.
-        env:
-          GOOS: windows
-          GOARCH: amd64
-          CGO_ENABLED: '0'
-        run: go build ./cmd/penguind ./cmd/penguin ./internal/... ./pkg/...
-      - name: Smoke test
-        run: make smoke-test
-
-  # Supply-chain scan carried forward from main's template CI (filesystem vuln +
-  # misconfig + secret). Report-only, matching main's non-blocking behavior; the
-  # pre-push hook gates trivy locally, and govulncheck above gates Go vulns.
-  # Runs on the bare runner (not the golang container) so trivy-action can
-  # install the scanner. Action pinned to the v0.35.0 commit SHA.
-  trivy:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      - name: Trivy filesystem scan
-        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0
-        with:
-          scan-type: fs
-          scan-ref: .
-          scanners: vuln,misconfig,secret
-          severity: HIGH,CRITICAL
-          ignore-unfixed: true
-          exit-code: '0'
+          cargo install cargo-audit --locked
+          cargo audit

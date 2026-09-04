@@ -1,0 +1,367 @@
+//! Daemon-provided capabilities injected into a module at [`crate::Module::init`].
+//!
+//! For built-in modules these are backed directly by daemon subsystems. For
+//! external plugins the equivalent Go proxies broker each call back to the
+//! daemon over gRPC; either way a module sees the same [`HostServices`] surface.
+
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::SystemTime;
+
+use async_trait::async_trait;
+
+use crate::error::{MetricsError, SecretError};
+
+/// The bundle of host capabilities a module receives at init time.
+///
+/// The cheap accessors return shared handles (`Arc<dyn ...>`) rather than doing
+/// work, so a module can stash them and use them for the rest of its life.
+pub trait HostServices: Send + Sync {
+    /// A PII-sanitising logger scoped to this module.
+    fn logger(&self) -> Arc<dyn Logger>;
+    /// The module's namespaced secure key/value store.
+    fn secrets(&self) -> Arc<dyn SecretStore>;
+    /// Feature-flag and license-tier checks with offline caching.
+    fn license(&self) -> Arc<dyn LicenseChecker>;
+    /// A metrics handle namespaced to this module.
+    fn metrics(&self) -> Arc<dyn Metrics>;
+    /// The module's configuration as raw YAML bytes, already validated by the
+    /// daemon against the module's schema. Empty means the operator supplied
+    /// none — the module applies its own defaults. Modules must never read
+    /// config files themselves; routing config through the host is what
+    /// guarantees it was schema-checked.
+    fn config(&self) -> Vec<u8>;
+    /// The module's private state directory (e.g. `/var/lib/penguind/<module>`).
+    fn data_dir(&self) -> PathBuf;
+    /// The sink module status-change events are published to.
+    fn events(&self) -> Arc<dyn EventSink>;
+    /// A telemetry handle scoped to this module (metrics/traces/logs → OTLP/SigNoz).
+    /// Defaults to a no-op so existing implementations need no change and a disabled
+    /// exporter is always safe to call. The daemon overrides this with a real handle.
+    fn telemetry(&self) -> std::sync::Arc<dyn crate::ModuleTelemetry> {
+        std::sync::Arc::new(crate::NoopTelemetry)
+    }
+}
+
+/// Namespaced secure storage backed by the OS keychain/keystore (with an
+/// encrypted-file fallback for headless daemons).
+///
+/// Async because the keychain backends can block on IPC; the daemon must not
+/// stall its executor on a secret lookup.
+#[async_trait]
+pub trait SecretStore: Send + Sync {
+    /// Fetches a secret, or returns [`SecretError::NotFound`] if absent.
+    async fn get(&self, key: &str) -> Result<Vec<u8>, SecretError>;
+    /// Stores (or replaces) a secret.
+    async fn set(&self, key: &str, value: &[u8]) -> Result<(), SecretError>;
+    /// Deletes a secret. Deleting a key that does not exist returns
+    /// [`SecretError::NotFound`] rather than succeeding silently — this matches
+    /// the Go store, and Go-built plugins rely on it across the plugin boundary
+    /// (their host proxy maps the string `"not found"` back to the same
+    /// sentinel). An idempotent delete would read more nicely, but it would
+    /// change behaviour existing modules already depend on.
+    async fn delete(&self, key: &str) -> Result<(), SecretError>;
+}
+
+/// Feature-flag and entitlement checks.
+///
+/// Implementations must degrade gracefully: an unreachable server yields the
+/// last cached answer, unknown flags are off, and no call ever panics. That
+/// contract is why these are synchronous — they read a cache, never the wire.
+pub trait LicenseChecker: Send + Sync {
+    /// Reports whether a flag key (e.g. `"penguin.squawk"`) is enabled.
+    fn feature_enabled(&self, key: &str) -> bool;
+    /// Returns the current license tier (`"free"`, `"professional"`,
+    /// `"enterprise"`, or empty when unknown). Tiers are cumulative.
+    fn tier(&self) -> String;
+}
+
+/// A metrics registerer scoped to a module.
+///
+/// Mirrors the Go `prometheus.Registerer` a module receives: it registers
+/// collectors into the daemon's shared registry under the module's namespace.
+pub trait Metrics: Send + Sync {
+    /// Registers a collector; a duplicate registration is a [`MetricsError`].
+    fn register(&self, collector: Box<dyn prometheus::core::Collector>)
+    -> Result<(), MetricsError>;
+}
+
+/// The severity of a log record.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LogLevel {
+    /// Verbose developer detail.
+    Debug,
+    /// Normal operational information.
+    #[default]
+    Info,
+    /// A recoverable problem worth attention.
+    Warn,
+    /// A failure.
+    Error,
+}
+
+impl LogLevel {
+    /// Returns the lowercase wire string for this level.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            LogLevel::Debug => "debug",
+            LogLevel::Info => "info",
+            LogLevel::Warn => "warn",
+            LogLevel::Error => "error",
+        }
+    }
+
+    /// Parses a wire string into a level; unknown values return `None`.
+    pub fn parse(value: &str) -> Option<LogLevel> {
+        match value {
+            "debug" => Some(LogLevel::Debug),
+            "info" => Some(LogLevel::Info),
+            "warn" => Some(LogLevel::Warn),
+            "error" => Some(LogLevel::Error),
+            _ => None,
+        }
+    }
+}
+
+/// A structured logger scoped to a module.
+///
+/// The single required method is [`Logger::log`]; the level-named helpers are
+/// provided defaults so implementations only write the routing once. Fields are
+/// borrowed key/value pairs to keep logging allocation-free at the call site.
+pub trait Logger: Send + Sync {
+    /// Emits one record at the given level.
+    fn log(&self, level: LogLevel, message: &str, fields: &[(&str, &str)]);
+
+    /// Emits a debug record.
+    fn debug(&self, message: &str, fields: &[(&str, &str)]) {
+        self.log(LogLevel::Debug, message, fields);
+    }
+    /// Emits an info record.
+    fn info(&self, message: &str, fields: &[(&str, &str)]) {
+        self.log(LogLevel::Info, message, fields);
+    }
+    /// Emits a warn record.
+    fn warn(&self, message: &str, fields: &[(&str, &str)]) {
+        self.log(LogLevel::Warn, message, fields);
+    }
+    /// Emits an error record.
+    fn error(&self, message: &str, fields: &[(&str, &str)]) {
+        self.log(LogLevel::Error, message, fields);
+    }
+}
+
+/// The sink module status-change events are published to (tray, CLI watchers).
+pub trait EventSink: Send + Sync {
+    /// Publishes one event to all current subscribers.
+    fn publish(&self, event: Event);
+}
+
+/// The classification of a module event.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum EventType {
+    /// The module's lifecycle state changed.
+    #[default]
+    StateChanged,
+    /// A health transition.
+    Health,
+    /// Informational.
+    Info,
+    /// An error condition.
+    Error,
+}
+
+impl EventType {
+    /// Returns the wire string for this event type.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            EventType::StateChanged => "state-changed",
+            EventType::Health => "health",
+            EventType::Info => "info",
+            EventType::Error => "error",
+        }
+    }
+
+    /// Parses a wire string into an event type; unknown values return `None`.
+    pub fn parse(value: &str) -> Option<EventType> {
+        match value {
+            "state-changed" => Some(EventType::StateChanged),
+            "health" => Some(EventType::Health),
+            "info" => Some(EventType::Info),
+            "error" => Some(EventType::Error),
+            _ => None,
+        }
+    }
+}
+
+/// A module status-change notification.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Event {
+    /// The publishing module's name.
+    pub module: String,
+    /// What kind of event this is.
+    pub event_type: EventType,
+    /// A short human-readable message.
+    pub message: String,
+    /// When the event occurred.
+    pub at: SystemTime,
+    /// Small, non-sensitive key/value context for display.
+    pub fields: HashMap<String, String>,
+}
+
+#[cfg(test)]
+mod telemetry_default_tests {
+    use super::*;
+
+    /// Implements every `HostServices` method except `telemetry()`, to prove
+    /// the trait's default body is what makes the accessor usable.
+    struct MinimalHost;
+
+    struct MinimalLogger;
+    impl Logger for MinimalLogger {
+        fn log(&self, _level: LogLevel, _message: &str, _fields: &[(&str, &str)]) {}
+    }
+
+    struct MinimalSecrets;
+    #[async_trait]
+    impl SecretStore for MinimalSecrets {
+        async fn get(&self, _key: &str) -> Result<Vec<u8>, SecretError> {
+            Err(SecretError::NotFound)
+        }
+        async fn set(&self, _key: &str, _value: &[u8]) -> Result<(), SecretError> {
+            Ok(())
+        }
+        async fn delete(&self, _key: &str) -> Result<(), SecretError> {
+            Ok(())
+        }
+    }
+
+    struct MinimalLicense;
+    impl LicenseChecker for MinimalLicense {
+        fn feature_enabled(&self, _key: &str) -> bool {
+            false
+        }
+        fn tier(&self) -> String {
+            String::new()
+        }
+    }
+
+    struct MinimalMetrics;
+    impl Metrics for MinimalMetrics {
+        fn register(
+            &self,
+            _collector: Box<dyn prometheus::core::Collector>,
+        ) -> Result<(), MetricsError> {
+            Ok(())
+        }
+    }
+
+    struct MinimalEvents;
+    impl EventSink for MinimalEvents {
+        fn publish(&self, _event: Event) {}
+    }
+
+    impl HostServices for MinimalHost {
+        fn logger(&self) -> Arc<dyn Logger> {
+            Arc::new(MinimalLogger)
+        }
+        fn secrets(&self) -> Arc<dyn SecretStore> {
+            Arc::new(MinimalSecrets)
+        }
+        fn license(&self) -> Arc<dyn LicenseChecker> {
+            Arc::new(MinimalLicense)
+        }
+        fn metrics(&self) -> Arc<dyn Metrics> {
+            Arc::new(MinimalMetrics)
+        }
+        fn config(&self) -> Vec<u8> {
+            Vec::new()
+        }
+        fn data_dir(&self) -> PathBuf {
+            PathBuf::new()
+        }
+        fn events(&self) -> Arc<dyn EventSink> {
+            Arc::new(MinimalEvents)
+        }
+        // telemetry() intentionally NOT overridden — proves the default exists.
+    }
+
+    #[test]
+    fn telemetry_defaults_to_noop_for_impls_that_do_not_override() {
+        let host = MinimalHost;
+        // Compiles only if `telemetry()` has a default body; the returned
+        // handle must be safely callable without panicking.
+        host.telemetry().counter_add("x", 1, &[]);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    /// A test double that records every call routed through the default helpers,
+    /// proving they all funnel into `log` with the right level.
+    struct RecordingLogger {
+        calls: Mutex<Vec<(LogLevel, String)>>,
+    }
+
+    impl Logger for RecordingLogger {
+        fn log(&self, level: LogLevel, message: &str, _fields: &[(&str, &str)]) {
+            let mut calls = self.calls.lock().unwrap();
+            calls.push((level, message.to_string()));
+        }
+    }
+
+    #[test]
+    fn log_level_round_trips_and_rejects_unknown() {
+        let all = [
+            LogLevel::Debug,
+            LogLevel::Info,
+            LogLevel::Warn,
+            LogLevel::Error,
+        ];
+        for want in all {
+            assert_eq!(LogLevel::parse(want.as_str()), Some(want));
+        }
+        assert_eq!(LogLevel::parse("trace"), None);
+    }
+
+    #[test]
+    fn event_type_round_trips_and_rejects_unknown() {
+        let all = [
+            EventType::StateChanged,
+            EventType::Health,
+            EventType::Info,
+            EventType::Error,
+        ];
+        for want in all {
+            assert_eq!(EventType::parse(want.as_str()), Some(want));
+        }
+        assert_eq!(EventType::parse("panic"), None);
+    }
+
+    #[test]
+    fn logger_default_helpers_route_to_the_matching_level() {
+        let logger = RecordingLogger {
+            calls: Mutex::new(Vec::new()),
+        };
+        logger.debug("d", &[]);
+        logger.info("i", &[]);
+        logger.warn("w", &[]);
+        logger.error("e", &[]);
+
+        let calls = logger.calls.lock().unwrap();
+        let expected = [
+            (LogLevel::Debug, "d"),
+            (LogLevel::Info, "i"),
+            (LogLevel::Warn, "w"),
+            (LogLevel::Error, "e"),
+        ];
+        assert_eq!(calls.len(), expected.len());
+        for (index, want) in expected.iter().enumerate() {
+            assert_eq!(calls[index].0, want.0);
+            assert_eq!(calls[index].1, want.1);
+        }
+    }
+}

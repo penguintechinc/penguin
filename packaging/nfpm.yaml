@@ -1,0 +1,49 @@
+# nfpm config for the penguin endpoint agent — replaces go-client/.goreleaser.yaml's
+# `nfpms:` block now that packaging is driven by hand-rolled GitHub Actions steps
+# instead of goreleaser (see .github/workflows/release.yml's `packages` job).
+#
+# Invoked twice per release (once per Linux arch), NOT via goreleaser's builtin
+# arch loop:
+#   PKG_VERSION=<version-without-v> PKG_ARCH=amd64 nfpm package --config packaging/nfpm.yaml --packager deb --target dist/out/penguin_<version>_amd64.deb
+#   PKG_VERSION=<version-without-v> PKG_ARCH=amd64 nfpm package --config packaging/nfpm.yaml --packager rpm --target dist/out/penguin_<version>_amd64.rpm
+# repeated with PKG_ARCH=arm64. `arch`, `version`, `maintainer`, `description`,
+# `vendor`, and `homepage` below expand ${ENV_VAR} at package time (documented
+# nfpm behavior — see www/content/docs/configuration.md in goreleaser/nfpm); the
+# `contents.src` binary paths deliberately do NOT rely on that expansion (nfpm
+# does not document env expansion for content paths), so the release workflow
+# re-stages dist/stage/{penguind,pdcli} with the correct arch's binaries
+# before each of the two nfpm invocations, and this file always points at the
+# same fixed dist/stage/ path.
+name: penguin
+arch: "${PKG_ARCH}"
+platform: linux
+version: "${PKG_VERSION}"
+section: net
+priority: optional
+maintainer: "PenguinTech <support@penguintech.io>"
+description: |
+  PenguinTech unified endpoint agent — daemon (penguind) and CLI (pdcli).
+vendor: PenguinTech
+homepage: https://www.penguintech.io
+# Matches go-client/.goreleaser.yaml's nfpms.license exactly. The workspace's
+# Cargo.toml [workspace.package] uses the custom `LicenseRef-PenguinTech`
+# SPDX-ref identifier (see LICENSE.md's AGPL-3.0-plus-commercial-exception
+# terms), which deb/rpm tooling would not recognize as a real license
+# identifier, so packaging metadata keeps the plain AGPL-3.0 string instead.
+license: AGPL-3.0
+
+contents:
+  - src: dist/stage/penguind
+    dst: /usr/bin/penguind
+    file_info:
+      mode: 0755
+  - src: dist/stage/pdcli
+    dst: /usr/bin/pdcli
+    file_info:
+      mode: 0755
+  # M7.1's hardened unit — owned by that milestone, referenced (not copied)
+  # from its packaging/systemd/ location.
+  - src: packaging/systemd/penguind.service
+    dst: /lib/systemd/system/penguind.service
+    file_info:
+      mode: 0644

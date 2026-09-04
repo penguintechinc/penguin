@@ -1,0 +1,24 @@
+[package]
+name = "penguin-secrets"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+penguin-sdk.workspace = true
+async-trait.workspace = true
+keyring.workspace = true
+chacha20poly1305.workspace = true
+zeroize.workspace = true
+rand.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+# Test-only scratch directories for the file backend's temp key/secret files.
+tempfile = "3"

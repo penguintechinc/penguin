@@ -1,0 +1,42 @@
+{
+  "productName": "Penguin Desktop",
+  "version": "0.2.0",
+  "identifier": "io.penguintech.penguin.desktop",
+  "build": {
+    "beforeDevCommand": "echo 'Phase 3: frontend build will go here'",
+    "beforeBuildCommand": "bash scripts/fetch-webui.sh",
+    "devUrl": "http://localhost:5173",
+    "frontendDist": "../frontend/dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Penguin Desktop",
+        "width": 1400,
+        "height": 900,
+        "minWidth": 400,
+        "minHeight": 300,
+        "resizable": true,
+        "fullscreen": false
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' https:; connect-src 'self' https://*.penguintech.cloud https://*.penguintech.io wss: https:;"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "deb",
+      "appimage"
+    ]
+  },
+  "plugins": {
+    "deep-link": {
+      "active": true,
+      "schemes": [
+        "waddles"
+      ]
+    }
+  }
+}

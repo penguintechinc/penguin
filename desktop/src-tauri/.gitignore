@@ -1,0 +1,6 @@
+# Rust / Cargo build artifacts for the Tauri shell (excluded so the 3.9GB webkit
+# build target never enters git). Cargo.lock IS committed (this is a binary).
+/target/
+
+# Tauri-generated schema/artifact dirs.
+/gen/schemas

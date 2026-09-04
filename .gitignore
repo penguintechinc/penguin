@@ -1,42 +1,38 @@
-# OS
+# Rust workspace
+/target/
+**/*.rs.bk
+
+# Coverage (cargo-llvm-cov)
+*.profraw
+*.profdata
+lcov.info
+coverage/
+
+# OS / editors
 .DS_Store
 Thumbs.db
 *~
-
-# IDEs
-.vscode/
-.idea/
 *.swp
 *.swo
+.idea/
+.vscode/
 
-# Build artifacts
-bin/
-# Binaries accidentally built into the repo root (build to ./bin via `make build`)
-/penguind
-/penguin
-/penguin-tray
-/pcli
-/plugin-hello
-*.exe
-*.msi
-coverage.filtered.out
-dist/
-coverage.out
-coverage.unit.out
-coverage.int.out
-coverage.intfiltered.out
-*.test
-
-# Secrets & env — never commit
+# Secrets & env — never commit (root-anchored so it never shadows source dirs)
 .env
 .env.*
 *.key
 *.pem
 credentials.json
-# Root-anchored: ignore a top-level real-secrets dir only. A bare `secrets/`
-# also matched the internal/secrets source package and left it untracked.
 /secrets/
 
-# Local state
+# Local crash-recovery state
 .PLAN
 .TODO
+
+# Parallel-work git worktrees (this repo's checkout is shared with other
+# sessions; the migration work runs in an isolated worktree here)
+/.worktrees/
+.worktrees/
+
+# SDD scratch (subagent-driven-development workspace)
+/.superpowers/

@@ -1,18 +1,27 @@
-# penguind — PenguinTech endpoint agent daemon.
+# penguind — PenguinTech endpoint agent daemon (Rust).
 # Least-privilege system service: it needs exactly two capabilities
 # (manage network interfaces for tunnels; bind privileged port 53 for the DNS
 # forwarder) and nothing else. Install to /etc/systemd/system/penguind.service.
+#
+# This is the single hardened unit `penguind service install` writes,
+# embedded verbatim into the binary via `include_str!` — see
+# `bins/penguind/src/service/mod.rs`. Ported from
+# `go-client/packaging/systemd/penguind.service`; intentional divergence:
+# `Restart=always` + `RestartSec=2` + `StartLimitIntervalSec=0` (self-protection
+# auto-restart hardening, ensuring the agent daemon always restarts on crash
+# or termination without systemd's start-limit backoff ever kicking in).
 [Unit]
 Description=Penguin endpoint agent daemon
 Documentation=https://www.penguintech.io
 After=network-online.target
 Wants=network-online.target
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
 ExecStart=/usr/bin/penguind --config-dir /etc/penguin --state-dir /var/lib/penguind
-Restart=on-failure
-RestartSec=5
+Restart=always
+RestartSec=2
 
 # Runtime + state directories (systemd creates and owns them).
 RuntimeDirectory=penguin

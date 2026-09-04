@@ -1,0 +1,42 @@
+[package]
+name = "penguin-sdk"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+# Wire types the conversions target. sdk owns the hand-written glue between the
+# ergonomic Rust types here and the generated proto structs.
+penguin-proto.workspace = true
+# Dyn-dispatched async trait methods (Module/SecretStore) — the daemon holds
+# `dyn Module` and cannot tell built-in from external plugins apart.
+async-trait.workspace = true
+thiserror.workspace = true
+# Mirrors the Go sdk depending on prometheus: the metrics handle a module
+# registers collectors through.
+prometheus.workspace = true
+
+# The `plugin` module is the go-plugin *server* (plugin-process) side: an
+# external plugin binary built against this crate must speak the exact same
+# wire protocol `penguin-goplugin-host` speaks as the client. penguin-sdk
+# cannot depend on penguin-goplugin-host (that crate already depends on this
+# one — a cycle), so the small amount of shared protocol logic (AutoMTLS
+# cert template, pinned verifiers, handshake line framing) is deliberately
+# mirrored here rather than imported. See `plugin/mod.rs`.
+tokio.workspace = true
+tokio-stream.workspace = true
+tonic.workspace = true
+tonic-health.workspace = true
+rustls = { workspace = true }
+tokio-rustls.workspace = true
+rcgen.workspace = true
+base64.workspace = true
+hyper-util.workspace = true
+rand.workspace = true
+tracing.workspace = true

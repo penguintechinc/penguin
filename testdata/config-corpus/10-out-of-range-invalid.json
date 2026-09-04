@@ -1,0 +1,10 @@
+{
+  "description": "integer above maximum",
+  "valid": false,
+  "schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": { "port": { "type": "integer", "minimum": 1, "maximum": 65535 } }
+  },
+  "instanceYaml": "port: 70000\n"
+}

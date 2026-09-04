@@ -1,6 +1,15 @@
-# Release: on a version tag, build the three binaries for every target,
-# sign them (minisign for self-update + cosign for provenance), and publish a
-# GitHub Release with an SBOM. Actions pinned to commit SHAs per policy.
+# Release: on a version tag, build penguind + pdcli for every target,
+# package deb/rpm, generate an SBOM per archive, sign everything (minisign for
+# the in-app self-updater + cosign for provenance), and publish to the GitHub
+# Release. Replaces the goreleaser-driven go-client/.goreleaser.yaml now that
+# the workspace is Rust — see README.md in packaging/ for the full pipeline
+# writeup and the asset-naming contract this workflow must not drift from.
+#
+# Actions pinned to commit SHAs per policy. Third-party CLI tools (nfpm,
+# protoc, minisign) are pinned to an exact version and verified against a
+# SHA256 this PR's author computed directly from the upstream release asset
+# (see inline comments) — there was no published checksums.txt to pin against
+# for protoc/nfpm at authoring time.
 name: Release
 
 on:
@@ -9,29 +18,299 @@ on:
       - 'v*'
 
 permissions:
-  contents: write
-  id-token: write # cosign keyless signing
+  contents: read
+
+env:
+  # protoc v35.1 prebuilt archives. tonic-prost-build (penguin-proto's
+  # build.rs) shells out to a system `protoc`, and — unlike the apt/brew
+  # packages ci.yml and wire-compat.yml install — the official release zips
+  # ship `include/google/protobuf/*.proto` in the path protoc searches by
+  # default relative to its own binary, so no separate libprotobuf-dev-style
+  # package or -I flag is needed on any OS. Build scripts run on the HOST
+  # arch regardless of --target (cross-compilation only affects the final
+  # link), so each OS needs exactly one protoc download regardless of which
+  # target arch that runner is building.
+  PROTOC_VERSION: '35.1'
 
 jobs:
-  release:
+  # Single source of truth for the release version string, computed once so
+  # every downstream job/matrix leg uses the identical value. Must strip the
+  # tag's leading "v" as platform::normalize_version does on the self-update
+  # side — a mismatch here is exactly the class of bug this milestone exists
+  # to prevent.
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - id: v
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+  # Builds penguind + pdcli for every (os, arch) pair and packages them into
+  # the exact archive name crates/penguin-update/src/platform.rs::asset_filename
+  # builds when checking for updates: penguin_<version>_<os>_<arch>.<ext>,
+  # <os> in {linux, darwin, windows} (NOT Rust's own darwin/macos spelling —
+  # see that module's doc comment), <ext> tar.gz except zip on windows.
+  #
+  # All six legs build natively on the runner's own architecture rather than
+  # cross-compiling via the `cross` tool. `cross` runs the entire cargo
+  # invocation (including build.rs) inside a Docker container, and the
+  # default cross-rs images do not ship protoc — penguin-proto's build.rs
+  # would fail before producing anything. GitHub's native ubuntu-24.04-arm /
+  # macos-15-intel / macos-latest runners sidestep that entirely (same reasoning
+  # release-tray.yml already applied to the Go tray's cgo requirement, now
+  # applied here to protoc); the sole exception is windows/arm64, which has
+  # no native GitHub-hosted runner at all, so that leg cross-links from
+  # windows-latest (x86_64) using the ARM64 MSVC toolset already present on
+  # that image (Microsoft.VisualStudio.Component.VC.Tools.ARM64 — confirmed
+  # in actions/runner-images' Windows2022-Readme.md) — build.rs still runs on
+  # the amd64 host, so protoc is unaffected either way.
+  build:
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            asset_os: linux
+            asset_arch: amd64
+            archive_ext: tar.gz
+            protoc_zip: protoc-35.1-linux-x86_64.zip
+            protoc_sha256: 6930ebf62bd4ea607b98fff052596c6ee564b9835b4ce172c75a3f53ae9d91b7
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            asset_os: linux
+            asset_arch: arm64
+            archive_ext: tar.gz
+            protoc_zip: protoc-35.1-linux-aarch_64.zip
+            protoc_sha256: 01bf9d08808c7f96678b63f4bd8efa559bb4f83d5a7a270d5edaf507f9d5d9cf
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+            asset_os: darwin
+            asset_arch: amd64
+            archive_ext: tar.gz
+            protoc_zip: protoc-35.1-osx-universal_binary.zip
+            protoc_sha256: 9c27aebb44c537f5627cc13c9c1c6bc0e34ecfefc6e4d79b19764afb8302d95b
+          - runner: macos-latest
+            target: aarch64-apple-darwin
+            asset_os: darwin
+            asset_arch: arm64
+            archive_ext: tar.gz
+            protoc_zip: protoc-35.1-osx-universal_binary.zip
+            protoc_sha256: 9c27aebb44c537f5627cc13c9c1c6bc0e34ecfefc6e4d79b19764afb8302d95b
+          - runner: windows-latest
+            target: x86_64-pc-windows-msvc
+            asset_os: windows
+            asset_arch: amd64
+            archive_ext: zip
+            protoc_zip: protoc-35.1-win64.zip
+            protoc_sha256: 5d3ff218d7d91eea95f7569bcb5a98f3030f8996d44151279d9772edcff76082
+          - runner: windows-latest
+            # Cross-linked, not natively built — see the job-level comment.
+            target: aarch64-pc-windows-msvc
+            asset_os: windows
+            asset_arch: arm64
+            archive_ext: zip
+            protoc_zip: protoc-35.1-win64.zip
+            protoc_sha256: 5d3ff218d7d91eea95f7569bcb5a98f3030f8996d44151279d9772edcff76082
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Install Rust (matches rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master
+        with:
+          # Keep in sync with rust-toolchain.toml's channel by hand — this
+          # action selects toolchain by explicit input here, not by reading
+          # that file, so a version bump there needs a matching edit here.
+          toolchain: '1.97.0'
+          targets: ${{ matrix.target }}
+
+      - name: Install protoc ${{ env.PROTOC_VERSION }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -sSL -o protoc.zip "https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/${{ matrix.protoc_zip }}"
+          echo "${{ matrix.protoc_sha256 }}  protoc.zip" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/protoc"
+          unzip -q protoc.zip -d "$RUNNER_TEMP/protoc"
+          chmod +x "$RUNNER_TEMP/protoc/bin/protoc"
+          echo "$RUNNER_TEMP/protoc/bin" >> "$GITHUB_PATH"
+
+      - name: Build penguind + pdcli
+        shell: bash
+        run: cargo build --release --locked --target ${{ matrix.target }} -p penguind -p pdcli
+
+      - name: Compute asset filename
+        id: asset
+        shell: bash
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: echo "name=penguin_${VERSION}_${{ matrix.asset_os }}_${{ matrix.asset_arch }}.${{ matrix.archive_ext }}" >> "$GITHUB_OUTPUT"
+
+      - name: Stage binaries (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          mkdir -p stage
+          cp "target/${{ matrix.target }}/release/penguind" stage/
+          cp "target/${{ matrix.target }}/release/pdcli" stage/
+
+      - name: Stage binaries (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          mkdir -p stage
+          cp "target/${{ matrix.target }}/release/penguind.exe" stage/
+          cp "target/${{ matrix.target }}/release/pdcli.exe" stage/
+
+      - name: Create archive (tar.gz)
+        if: matrix.archive_ext == 'tar.gz'
+        shell: bash
+        run: tar -czf "${{ steps.asset.outputs.name }}" -C stage penguind pdcli
+
+      - name: Create archive (zip)
+        if: matrix.archive_ext == 'zip'
+        shell: pwsh
+        run: Compress-Archive -Path stage/penguind.exe, stage/pdcli.exe -DestinationPath "${{ steps.asset.outputs.name }}"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: archive-${{ matrix.asset_os }}-${{ matrix.asset_arch }}
+          path: ${{ steps.asset.outputs.name }}
+          if-no-files-found: error
+
+  # deb/rpm packages via nfpm (packaging/nfpm.yaml), one pair per Linux arch.
+  # Repackages the already-built linux archives from the `build` job rather
+  # than rebuilding — nfpm itself needs no target-arch execution, only the
+  # already-compiled binaries as file input.
+  packages:
+    needs: [version, build]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          fetch-depth: 0
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+          pattern: archive-linux-*
+          path: archives
+          merge-multiple: true
+
+      - name: Install nfpm 2.47.0
+        run: |
+          set -euo pipefail
+          curl -sSL -o nfpm.tar.gz https://github.com/goreleaser/nfpm/releases/download/v2.47.0/nfpm_2.47.0_Linux_x86_64.tar.gz
+          echo "0660ca602b2d2d2ae4781a06c692b3eeb9d437ffea05b831d76e41f4a3188783  nfpm.tar.gz" | sha256sum -c -
+          tar -xzf nfpm.tar.gz nfpm
+          sudo install -m 0755 nfpm /usr/local/bin/nfpm
+          rm nfpm.tar.gz nfpm
+
+      - name: Package amd64 (deb + rpm)
+        env:
+          PKG_VERSION: ${{ needs.version.outputs.version }}
+          PKG_ARCH: amd64
+        run: |
+          set -euo pipefail
+          rm -rf dist/stage && mkdir -p dist/stage dist/out
+          tar -xzf "archives/penguin_${PKG_VERSION}_linux_amd64.tar.gz" -C dist/stage
+          nfpm package --config packaging/nfpm.yaml --packager deb --target "dist/out/penguin_${PKG_VERSION}_amd64.deb"
+          nfpm package --config packaging/nfpm.yaml --packager rpm --target "dist/out/penguin_${PKG_VERSION}_amd64.rpm"
+
+      - name: Package arm64 (deb + rpm)
+        env:
+          PKG_VERSION: ${{ needs.version.outputs.version }}
+          PKG_ARCH: arm64
+        run: |
+          set -euo pipefail
+          rm -rf dist/stage && mkdir -p dist/stage
+          tar -xzf "archives/penguin_${PKG_VERSION}_linux_arm64.tar.gz" -C dist/stage
+          nfpm package --config packaging/nfpm.yaml --packager deb --target "dist/out/penguin_${PKG_VERSION}_arm64.deb"
+          nfpm package --config packaging/nfpm.yaml --packager rpm --target "dist/out/penguin_${PKG_VERSION}_arm64.rpm"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          go-version: '1.25'
+          name: packages
+          path: dist/out/*
+          if-no-files-found: error
+
+  # Aggregates every archive + package, SBOMs each archive, minisign-signs
+  # every artifact (the self-updater only strictly needs archives signed, but
+  # go-client/.goreleaser.yaml signed `artifacts: all` and this keeps parity),
+  # cosign keyless-signs the checksums file, then publishes the lot to the
+  # GitHub Release for this tag.
+  finalize:
+    needs: [version, build, packages]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write # cosign keyless signing
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: archive-*
+          path: dist
+          merge-multiple: true
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: packages
+          path: dist
+
+      - name: Install syft
+        id: syft
+        uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          syft-version: v1.49.0
+
+      - name: Install minisign
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends minisign
+
       - uses: sigstore/cosign-installer@d7d6bc7722e3daa8354c50bcb52f4837da5e9b6a # v3.8.1
         with:
           cosign-release: 'v3.1.1'
-      - name: Run goreleaser
-        uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6
-        with:
-          version: '~> v2'
-          args: release --clean
+
+      - name: "Generate SBOMs (one per archive, matching goreleaser's sboms/artifacts=archive setting)"
+        working-directory: dist
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          for f in *.tar.gz *.zip; do
+            "${{ steps.syft.outputs.cmd }}" scan "$f" -o "spdx-json=$f.spdx.json"
+          done
+
+      - name: Stage minisign secret key
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Base64-encoded minisign secret key for signing self-update artifacts.
           MINISIGN_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+        run: |
+          set -euo pipefail
+          umask 077
+          printf '%s' "$MINISIGN_KEY" | base64 -d > "$RUNNER_TEMP/minisign.key"
+
+      - name: Checksum + minisign every archive, package, and the checksum file
+        working-directory: dist
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          sha256sum -- *.tar.gz *.zip *.deb *.rpm > checksums.txt
+          for f in *.tar.gz *.zip *.deb *.rpm checksums.txt; do
+            minisign -S -s "$RUNNER_TEMP/minisign.key" -m "$f" -x "$f.minisig"
+          done
+
+      - name: Remove staged secret key
+        if: always()
+        run: shred -u "$RUNNER_TEMP/minisign.key" 2>/dev/null || rm -f "$RUNNER_TEMP/minisign.key"
+
+      - name: cosign keyless-sign checksums.txt
+        working-directory: dist
+        env:
           COSIGN_YES: 'true'
+        run: cosign sign-blob --yes --output-signature=checksums.txt.sig --output-certificate=checksums.txt.pem checksums.txt
+
+      - name: Publish release assets
+        working-directory: dist
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${{ github.ref_name }}" --repo penguintechinc/penguin --clobber -- *

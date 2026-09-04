@@ -1,9 +1,11 @@
-# Dependabot version updates for the Penguin endpoint agent.
-# https://docs.github.com/code-security/dependabot/dependabot-version-updates
+# Dependabot for the penguin repo: the Rust workspace (root) and pinned
+# GitHub Actions. The frozen go-client/ Go module was removed (its go.mod
+# only ever generated stale bump PRs against code that would never accept
+# them) — see git history for the gomod ecosystem entry that tracked it.
 version: 2
 updates:
-  # Go module dependencies.
-  - package-ecosystem: "gomod"
+  # Rust workspace dependencies.
+  - package-ecosystem: "cargo"
     directory: "/"
     schedule:
       interval: "weekly"

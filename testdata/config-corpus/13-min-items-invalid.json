@@ -1,0 +1,12 @@
+{
+  "description": "array below minItems",
+  "valid": false,
+  "schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+      "servers": { "type": "array", "items": { "type": "string" }, "minItems": 1 }
+    }
+  },
+  "instanceYaml": "servers: []\n"
+}

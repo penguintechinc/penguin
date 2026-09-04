@@ -1,0 +1,10 @@
+{
+  "description": "value outside enum",
+  "valid": false,
+  "schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": { "mode": { "enum": ["a", "b", "c"] } }
+  },
+  "instanceYaml": "mode: z\n"
+}

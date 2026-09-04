@@ -1,0 +1,46 @@
+[package]
+name = "penguin-module-squawk"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+async-trait.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+# YAML parsing of the module's own on-disk config (the host hands `init`
+# already-schema-validated raw YAML bytes, not parsed JSON) — same crate
+# penguin-daemon's own ConfigStore uses, so both engines agree on the YAML
+# -> JSON bridge.
+serde-norway.workspace = true
+# Registers the module's five collectors into the shared daemon registry via
+# `penguin_sdk::Metrics`.
+prometheus.workspace = true
+# The public contract this crate implements (`Module`, `HostServices`, ...).
+penguin-sdk.workspace = true
+# Not a workspace dependency yet (only added there per-milestone as each
+# crate lands) — referenced by path, same convention as
+# `bins/penguind/Cargo.toml`'s `penguin-secrets`/`penguin-licensing` entries.
+# Provides the DoH client, local forwarder + cache, squawk's own license
+# validator, and the SNTP client this module wraps.
+squawk-client = { path = "../squawk-client" }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+# Schema-compiles-and-accepts-its-own-defaults tests only; not needed at
+# runtime (the daemon's own `penguin-daemon::config::ConfigStore` is what
+# actually validates a module's config against this schema in production).
+jsonschema.workspace = true

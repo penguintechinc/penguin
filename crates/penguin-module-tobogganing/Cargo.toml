@@ -1,0 +1,95 @@
+[package]
+name = "penguin-module-tobogganing"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[features]
+# Exposes the otherwise-private `wireguard` module as `pub` so the M6 gate
+# (`tests/wg_tunnel.rs`) can drive the real `KernelBackend` directly. Off by
+# default: production code, and every consumer of this crate, only ever sees
+# `TobogganingModule`/`factory` via the crate root — see `lib.rs`. Enabled
+# explicitly by `scripts/wg-tunnel/run.sh` and the integration CI workflow,
+# never implied by plain `cargo test`.
+integration-test = []
+
+[dependencies]
+async-trait.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+bytes.workspace = true
+libc.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+# YAML parsing of the module's own on-disk config — same crate
+# penguin-daemon's ConfigStore and penguin-module-squawk both use, so every
+# engine agrees on the YAML -> JSON bridge.
+serde-norway.workspace = true
+# Registers the module's six collectors into the shared daemon registry via
+# `penguin_sdk::Metrics`.
+prometheus.workspace = true
+# The public contract this crate implements (`Module`, `HostServices`, ...).
+penguin-sdk.workspace = true
+
+# Manager HTTP client (auth token lifecycle + tunnel config fetch). Default
+# features are off for the same reason as `penguin-licensing`: the workspace
+# is pinned to aws-lc-rs everywhere (the go-plugin P-521 work cannot use
+# rustls' default `ring` provider at all), so pulling in reqwest's stock TLS
+# here would put two crypto backends in one binary. `query` is layered on
+# top (additive — the base feature set stays whatever the workspace pins)
+# for `RequestBuilder::query`, used to send the client's WireGuard public
+# key when fetching tunnel config (see `vpn.rs`).
+reqwest = { workspace = true, features = ["query"] }
+webpki-roots.workspace = true
+rustls.workspace = true
+
+# Reads a freshly-issued JWT's `exp` claim WITHOUT verifying its signature,
+# to schedule a refresh — see `auth.rs` module doc for why that's safe here.
+# `aws_lc_rs` is enabled only so this crate's own tests can *mint* a signed
+# JWT fixture with `jsonwebtoken::encode` (production code never signs or
+# verifies — only `dangerous::insecure_decode`, which needs no provider at
+# all); aws-lc-rs is already pulled in transitively workspace-wide via
+# rustls, so this adds no new crypto backend to the `cargo tree -i ring`
+# gate.
+jsonwebtoken = { workspace = true, features = ["aws_lc_rs"] }
+
+# WireGuard kernel backend (Linux netlink) and the `Key`/`IpAddrMask` value
+# types shared by both backends. Not platform-gated at the dependency level
+# — only `wireguard/kernel.rs` itself is `#[cfg(target_os = "linux")]`;
+# `Key`/`IpAddrMask` are plain data types usable everywhere.
+defguard_wireguard_rs.workspace = true
+# WireGuard userspace protocol engine (Noise handshake state machine only —
+# no TUN/socket/event loop; see `wireguard/userspace.rs` module doc for
+# exactly what this backend does and does not implement).
+boringtun.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+# Schema-compiles-and-accepts-its-own-defaults tests only; not needed at
+# runtime (the daemon's own `penguin-daemon::config::ConfigStore` is what
+# actually validates a module's config against this schema in production) —
+# same rationale as `penguin-module-squawk`'s identical dev-dependency.
+jsonschema.workspace = true
+
+# `required-features` makes these targets invisible to every plain `cargo
+# build`/`cargo test`/`cargo clippy --all-targets` in the workspace (unit
+# gate, default lint, CI's own non-integration steps) — none of them enable
+# `integration-test`, so none of them ever need `wireguard` to be `pub` to
+# compile. Only `scripts/wg-tunnel/run.sh` and the integration workflow pass
+# `--features integration-test` and actually build/run them.
+[[test]]
+name = "wg_tunnel"
+path = "tests/wg_tunnel.rs"
+required-features = ["integration-test"]
+
+[[test]]
+name = "userspace_tunnel"
+path = "tests/userspace_tunnel.rs"
+required-features = ["integration-test"]

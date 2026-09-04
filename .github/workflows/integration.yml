@@ -1,15 +1,27 @@
-# Integration tier: runs the privileged, boundary-covering tests that a plain
-# unit run cannot reach — the go-plugin subprocess broker, the SO_PEERCRED socket
-# handshake, the userspace WireGuard device, and the system DNS resolver. Requires
-# NET_ADMIN + /dev/net/tun, so it runs in a privileged container. The coverage gate
-# here (`make test-integration-cover`) counts the boundary code and only excludes
-# generated/cmd/examples. Actions pinned to commit SHAs per policy.
-name: Integration
+# Integration tier: tests marked `#[ignore]` and gated on PENGUIN_INTEGRATION=1.
+#
+# These exercise real boundaries the unit gate deliberately excludes — unix
+# sockets and the SO_PEERCRED matrix (M2), external plugin subprocesses (M3),
+# privileged :53/:123 binds and resolver surgery (M5), and network namespaces
+# for WireGuard (M6). The container is privileged for exactly that reason.
+#
+# Unlike the unit gate this tier is functional validation, not a second coverage
+# gate; combined coverage is reported informationally by `make
+# test-integration-cover`. Actions pinned to commit SHAs.
+name: integration
 
 on:
   pull_request:
+    paths:
+      - "crates/**"
+      - "bins/**"
+      - "proto/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "Makefile"
+      - ".github/workflows/integration.yml"
   push:
-    branches: [main]
+    branches: [main, "release/**"]
 
 permissions:
   contents: read
@@ -18,19 +30,46 @@ jobs:
   integration:
     runs-on: ubuntu-latest
     container:
-      image: golang:1.25-bookworm
-      # --privileged + NET_ADMIN + /dev/net/tun: the tobogganing test brings up a
-      # userspace WireGuard device (embedded wireguard-go, no host kmod needed) and
-      # the squawk test rewrites a namespaced resolv.conf. The container process is
-      # root, so the euid>0 self-skip guards do not trip here.
-      options: --privileged --cap-add=NET_ADMIN --device=/dev/net/tun
+      image: rust:1.97-bookworm
+      # Privileged: root-only tests self-skip when unprivileged, so without this
+      # the tier would silently pass by skipping everything that matters.
+      options: --privileged
     env:
-      GOFLAGS: -buildvcs=false
+      PENGUIN_INTEGRATION: "1"
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      - name: Install netns tooling
-        run: apt-get update && apt-get install -y --no-install-recommends iproute2
-      - name: Integration tests (real subprocess, socket, resolver, WireGuard)
-        run: make test-integration
-      - name: Combined coverage report (boundary counted; informational)
-        run: make test-integration-cover
+      - name: protoc
+        # protobuf-compiler alone is not enough: libprotobuf-dev supplies the
+        # well-known types (google/protobuf/empty.proto) that the vendored
+        # go-plugin grpc_stdio.proto imports. iproute2/wireguard-tools/
+        # iputils-ping are the M6 WireGuard netns gate's scaffolding — it
+        # drives the CONTROLLED PEER through `ip`/`wg` directly and never
+        # through the code under test (see wg_tunnel.rs's module doc).
+        # openresolv provides `resolvconf`: defguard_wireguard_rs's
+        # remove_interface() shells out to it unconditionally on teardown
+        # even when DNS was never configured — without it KernelBackend's
+        # teardown fails on every interface with ENOENT.
+        run: apt-get update && apt-get install -y --no-install-recommends protobuf-compiler libprotobuf-dev iproute2 wireguard-tools iputils-ping openresolv
+      - name: integration tests
+        # `penguin-module-tobogganing/integration-test` is required to even
+        # compile wg_tunnel.rs (see that crate's Cargo.toml) — without it
+        # cargo skips the target entirely rather than failing to find a
+        # private module. The test itself self-skips at runtime (printing
+        # why, not failing) if this runner's kernel lacks the `wireguard`
+        # module; keep this feature flag on regardless, so on any runner
+        # that DOES have the module loaded, the gate actually exercises a
+        # real tunnel instead of silently never building it.
+        run: cargo test --workspace --locked --features penguin-module-tobogganing/integration-test -- --ignored
+
+      # Parity dim 7 (perf) + metrics values-under-load belong in this
+      # privileged tier, not plain parity CI — the forwarder QPS / daemon RSS
+      # sampling wants a real load generator against a mock DoH upstream
+      # (squawk-client testutil), and metric values only populate once the
+      # privileged module operations actually run. scripts/parity/perf.sh is
+      # informational and NEVER gates (it exits 0 regardless); this step is the
+      # declared home for that work, reusing this job's privileged setup rather
+      # than duplicating it.
+      - name: parity perf (informational, non-gating)
+        env:
+          PG_PERF_RUN: "1"
+        run: scripts/parity/perf.sh

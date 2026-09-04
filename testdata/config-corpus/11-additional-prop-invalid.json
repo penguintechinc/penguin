@@ -1,0 +1,11 @@
+{
+  "description": "unexpected property with additionalProperties false",
+  "valid": false,
+  "schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": { "endpoint": { "type": "string" } },
+    "additionalProperties": false
+  },
+  "instanceYaml": "endpoint: us-east\nbogus: nope\n"
+}

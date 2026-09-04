@@ -1,0 +1,58 @@
+[package]
+name = "penguin-update"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+# Fetches the GitHub "latest release" JSON and downloads the archive +
+# signature bytes. Built manually with the aws-lc-rs provider (see
+# `updater.rs::build_http_client`), matching `penguin-licensing`'s own
+# reqwest setup exactly — the whole workspace is pinned off `ring` for the
+# go-plugin P-521 handshake, and pulling reqwest's default TLS stack back in
+# here would put two crypto backends in the same binary.
+reqwest.workspace = true
+rustls.workspace = true
+webpki-roots.workspace = true
+# Swaps the running executable for the verified, extracted binary. See
+# workspace Cargo.toml's comment on this dependency for why it's here.
+self-replace.workspace = true
+# Stages the extracted binary on disk before self-replace copies it in —
+# `self_replace::self_replace` takes a path, not bytes. Loose "3" pin,
+# matching the convention every other crate in this workspace already uses
+# for this exact crate (tempfile is not risk-bearing/crypto, so it does not
+# get an exact pin).
+tempfile = "3"
+tar.workspace = true
+flate2.workspace = true
+zip.workspace = true
+# Picks the newest non-draft release by semver out of GitHub's `/releases`
+# list — see `release::select_latest_release`'s doc comment.
+semver.workspace = true
+# Verify-only minisign signature checking — same choice and same exact pin
+# as `penguin-extplugin`'s own `verify.rs` (see that crate's doc comment for
+# why signing never happens in production code). Not a workspace dependency
+# (extplugin declares it the same direct way), so pinned here identically.
+minisign-verify = "=0.2.5"
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+# `install()` (staging the extracted binary + `self_replace`) is blocking
+# filesystem I/O; it runs inside `tokio::task::spawn_blocking` rather than
+# directly on an async worker thread — see `updater.rs`.
+tokio.workspace = true
+
+[dev-dependencies]
+# Test-only minisign *signing*: generates an ephemeral keypair and signs a
+# fixture in-test, exactly like `penguin-daemon`'s own dev-dependency of the
+# same crate (see that crate's Cargo.toml comment) — `minisign-verify` above
+# is verify-only by design, so it cannot produce a signature for the
+# tamper-rejection tests. Same exact pin.
+minisign = "=0.9.1"

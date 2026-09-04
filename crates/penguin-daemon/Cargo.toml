@@ -1,0 +1,65 @@
+[package]
+name = "penguin-daemon"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+# penguin-ipc is deliberately NOT a dependency: the daemon library exposes the
+# gRPC service, and the penguind binary is what binds it to a transport. Keeping
+# the listener out of here keeps the lib testable without sockets.
+penguin-sdk.workspace = true
+penguin-proto.workspace = true
+penguin-telemetry.workspace = true
+penguin-otel.workspace = true
+# The external-plugin path: verification pipeline (manifest, ownership,
+# sha256, minisign) and the go-plugin host that launches a verified binary.
+# `external.rs` resolves a module name the builtin registry doesn't
+# recognise through these two.
+penguin-extplugin.workspace = true
+penguin-goplugin-host.workspace = true
+# waddlebot module: needed for the session proxy registry access in the daemon service.
+penguin-module-waddlebot.workspace = true
+
+tokio.workspace = true
+tokio-stream.workspace = true
+tokio-util.workspace = true
+tonic.workspace = true
+tonic-health.workspace = true
+async-trait.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+rand.workspace = true
+fs4.workspace = true
+
+serde.workspace = true
+serde-norway.workspace = true
+serde_json.workspace = true
+jsonschema.workspace = true
+
+[dev-dependencies]
+# Temp directories for the config-store, state, and lock tests; TempDir cleans
+# up on drop even when a test panics.
+tempfile = "3"
+# Test-only minisign *signing* for the external-plugin integration test
+# (`tests/external_plugin.rs`): `penguin-extplugin`'s `minisign-verify` is
+# verify-only by design (production code never needs a private key — see
+# that crate's own `verify.rs` doc comment), so a real signature fixture
+# over a freshly-built, non-reproducible Go binary needs a crate that can
+# actually sign. Same author/wire format as `minisign-verify`; pinned exact
+# like every other risk-bearing (crypto) crate in this workspace.
+minisign = "=0.9.1"
+# SHA256 for the same test fixture's manifest — pinned to the exact version
+# `penguin-extplugin` itself already uses, for one cryptographically
+# verified digest implementation across the two crates.
+sha2 = "=0.11.0"
+# Metrics parity test: first-party module metrics registration.
+penguin-module-squawk.workspace = true
+penguin-module-tobogganing.workspace = true
+prometheus.workspace = true

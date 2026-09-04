@@ -1,70 +1,37 @@
-[![License](https://img.shields.io/badge/License-Limited%20AGPL3-blue.svg)](LICENSE.md)
+# penguin — PenguinTech unified endpoint agent
 
-```
-                                    _
-    ____  ___  ____  ____ ___  __(_)___
-   / __ \/ _ \/ __ \/ __ `/ / / / / __ \
-  / /_/ /  __/ / / / /_/ / /_/ / / / / /
- / .___/\___/_/ /_/\__, /\__,_/_/_/ /_/
-/_/               /____/     endpoint agent
-```
+One hardened endpoint agent — a privileged daemon (`penguind`), an unprivileged
+CLI (`penguin`), and a system tray (`penguin-tray`) — that hosts every
+PenguinTech product (Squawk DoH, Tobogganing SASE, future ones) as a module
+behind a single plugin framework.
 
-# Penguin — Unified Endpoint Agent
+## Status: Go → Rust migration complete
 
-One hardened desktop/endpoint agent for all PenguinTech products. Product
-clients (Tobogganing SASE/ZTNA, Squawk DoH, and future products) are **modules**
-on a shared secure core: auth, licensing/feature flags, secure storage, config,
-metrics, tray, self-update, and packaging are written once.
+This repository root is a **Rust** Cargo workspace implementing the agent with
+100% feature parity with the original Go implementation (plus completion of
+the Go build's remaining stubs). The original Go implementation (`go-client/`)
+was kept frozen as a feature-parity conformance oracle through the rewrite and
+has since been removed — its only remaining purpose was generating stale
+Dependabot bump PRs against code that would never accept them. See
+[`docs/PARITY.md`](docs/PARITY.md) for the record of every deliberate
+divergence from Go behaviour.
 
-## Components
+The Rust daemon remains **wire-compatible with hashicorp go-plugin v1.7.0**,
+so existing Go-built external plugins keep loading unchanged — this wire
+protocol support (`crates/penguin-goplugin-host`) is pure Rust and has no
+dependency on the removed Go source tree.
 
-| Binary | Role | Privileges |
-|---|---|---|
-| `penguind` | Daemon hosting all modules; owns every privileged operation (tunnels, port 53, resolver changes) | System service, least-privilege capabilities |
-| `penguin` | CLI; talks to the daemon over authenticated local IPC | Unprivileged |
-| `penguin-tray` | System tray with per-module status/actions | Unprivileged, user session |
+### Layout
 
-## CLI
+| Path | What |
+|------|------|
+| `crates/` | Library crates (sdk, ipc, daemon, go-plugin host, squawk/tobogganing modules, …) |
+| `bins/` | `penguind`, `penguin`, `penguin-tray` |
+| `proto/` | Canonical `.proto` sources (single source of truth) |
+| `examples/plugin-hello-rs/` | Example Rust plugin (reverse go-plugin conformance) |
 
-```bash
-penguin modules                 # list modules and states
-penguin load <module>           # enable + start a module (persists)
-penguin unload <module>         # stop + disable a module
-penguin status [module]         # agent or per-module status
-penguin <module> <command>      # module commands, e.g.:
-penguin tobogganing connect
-penguin squawk query example.com
-penguin logs [module]
-penguin update                  # signed self-update
-penguin version
-```
-
-## Module framework
-
-Every product implements one interface (`pkg/sdk.Module`) — lifecycle,
-status/health, a declarative CLI command tree, and a config schema. Modules are
-either:
-
-- **Compiled-in** — one registry line in `internal/registry`; or
-- **External plugins** — separate binaries verified with pinned minisign
-  publisher keys before launch (see `docs/APP_STANDARDS.md`).
-
-Adding a new product client = implement the interface + one registry line.
-
-## Development
+### Build
 
 ```bash
-make build        # binaries into ./bin
-make lint         # golangci-lint
-make test         # unit tests, race detector, 90% coverage gate
-make smoke-test   # build + version smoke
-make pre-commit   # full gate
+cargo build --workspace          # Rust workspace
 ```
-
-See `docs/APP_STANDARDS.md` for architecture, security model, and the
-dependency risk register. Company standards live in `docs/standards/`.
-
-## Support
-
-- support@penguintech.io · https://www.penguintech.io
-- License: Limited AGPL-3.0 — see [LICENSE.md](LICENSE.md)

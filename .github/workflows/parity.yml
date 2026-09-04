@@ -1,0 +1,64 @@
+# M8 parity harness — plain-CI gating gates.
+#
+# Proves behavioural parity across the dimensions that need no privilege: RPC
+# coverage (dim 1), CLI tree structure (dim 2), daemon config verdicts (dim 3),
+# event semantics (dim 5), file permissions (dim 6), and the metrics golden
+# (dim 4, a cargo test owned by the metrics workstream). scripts/parity/run.sh
+# aggregates them and also reuses the existing wire-compat + cli-parity
+# precursors.
+#
+# The frozen Go oracle (go-client/) that this harness used to build and compare
+# against has been removed (dependabot noise on a permanently-frozen module,
+# with zero remaining benefit once the Go→Rust migration completed). The
+# Go-dependent gates (wire-compat, cli-parity, and the Go halves of config.sh /
+# cli-tree.sh) self-skip with a NOTE — see scripts/parity/lib.sh's
+# pg_have_go_cli / pg_build_go — so this job still runs and gates every
+# Rust-only dimension.
+#
+# Value-under-load metrics and perf (dim 7) are NOT here — they live in the
+# privileged integration tier (integration.yml). Actions are pinned to commit
+# SHAs; no github.event.* is interpolated into any run: step.
+name: parity
+
+on:
+  pull_request:
+    paths:
+      - "crates/**"
+      - "bins/**"
+      - "proto/**"
+      - "scripts/parity/**"
+      - "scripts/wire-compat/**"
+      - "scripts/cli-parity/**"
+      - "testdata/config-corpus/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "Makefile"
+      - ".github/workflows/parity.yml"
+  push:
+    branches: [main, "release/**"]
+
+permissions:
+  contents: read
+
+jobs:
+  parity-plain:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: protoc
+        # libprotobuf-dev supplies the well-known types the vendored go-plugin
+        # grpc_stdio.proto imports; protobuf-compiler alone fails that import
+        # (same reason as integration.yml).
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends protobuf-compiler libprotobuf-dev
+
+      - name: Build the Rust binaries + the raw wire probe
+        run: |
+          cargo build -p penguind -p pdcli --locked
+          cargo build -p pdcli --example parity_probe --locked
+
+      - name: Run the parity harness (gating gates)
+        env:
+          # Binaries are already built above; run.sh only aggregates.
+          PG_SKIP_BUILD: "1"
+        run: scripts/parity/run.sh

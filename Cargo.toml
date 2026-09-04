@@ -1,0 +1,308 @@
+# Penguin endpoint agent — Rust workspace root.
+#
+# The Go→Rust migration is complete: every crate here reached feature parity
+# with the original Go implementation. The Go source tree (formerly frozen
+# under `go-client/` as a feature-parity conformance oracle) has been removed
+# — see git history and docs/PARITY.md for the record of deliberate Go/Rust
+# behavioural divergences.
+#
+# House style (learning-oriented): keep turbofish and match-arms/closures to a
+# minimum, prefer explicit types + named helpers + if-let, and document every
+# module/type/fn with a `///` (what + why) comment.
+
+[workspace]
+resolver = "3"
+members = ["crates/*", "bins/*", "examples/plugin-hello-rs"]
+exclude = ["desktop"]
+
+[workspace.package]
+version = "0.2.0"
+edition = "2024"
+rust-version = "1.97"
+license = "LicenseRef-PenguinTech"
+repository = "https://github.com/penguintechinc/penguin"
+publish = false
+
+# Shared dependency versions are pinned here as crates are introduced per
+# milestone (M1+). Risk-bearing crates use an exact `=x.y.z`; the rest use a
+# semver-compatible range. Cargo.lock is committed, so even the ranges resolve
+# to one cryptographically-pinned version.
+[workspace.dependencies]
+
+# Internal crates, referenced by path. Added here as each milestone lands so
+# dependents can write `penguin-sdk.workspace = true`.
+penguin-proto = { path = "crates/penguin-proto" }
+penguin-sdk = { path = "crates/penguin-sdk" }
+penguin-telemetry = { path = "crates/penguin-telemetry" }
+penguin-ipc = { path = "crates/penguin-ipc" }
+penguin-daemon = { path = "crates/penguin-daemon" }
+penguin-otel = { path = "crates/penguin-otel" }
+# The external-plugin path: verification pipeline + the go-plugin host that
+# launches a verified binary. The daemon depends on both so LoadModule can
+# resolve a builtin OR an external module through one code path.
+penguin-extplugin = { path = "crates/penguin-extplugin" }
+penguin-goplugin-host = { path = "crates/penguin-goplugin-host" }
+# waddlebot: the hub REST client + the built-in module that wraps it (module
+# and its local bridge land in the waddlebot tracks).
+waddlebot-client = { path = "crates/waddlebot-client" }
+penguin-module-waddlebot = { path = "crates/penguin-module-waddlebot" }
+# Built-in modules for M6+ (squawk, tobogganing — Go porting milestones).
+penguin-module-squawk = { path = "crates/penguin-module-squawk" }
+penguin-module-tobogganing = { path = "crates/penguin-module-tobogganing" }
+# waddleai: the desktop-side companion to WaddleAI's agent-hooks feature —
+# installs per-ecosystem hook shims, holds the connection/credential, and
+# reports telemetry. Policy decisions stay server-side; see the crate's own
+# top-level doc.
+penguin-module-waddleai = { path = "crates/penguin-module-waddleai" }
+# SkausWatch: monitoring and alerting endpoint client.
+penguin-module-skauswatch = { path = "crates/penguin-module-skauswatch" }
+# The pure tray menu model, consumed by the penguin-tray platform shells (M7.3).
+penguin-tray-model = { path = "crates/penguin-tray-model" }
+# Desktop client (Phase 2a): IPC wrapper + keychain + OAuth glue for the Tauri shell.
+penguin-desktop-core = { path = "crates/penguin-desktop-core" }
+# OS keychain backend for desktop client session tokens.
+penguin-secrets = { path = "crates/penguin-secrets" }
+# SkausWatch agent API client with HMAC request signing.
+skauswatch-client = { path = "crates/skauswatch-client" }
+# Signed self-update: GitHub releases + minisign verify + in-place replace.
+# Was path-only (see bins/penguind/Cargo.toml's per-milestone convention)
+# until penguin-selfprotect became a second workspace-level consumer of its
+# `verify` function, promoting it here so both can write `.workspace = true`.
+penguin-update = { path = "crates/penguin-update" }
+# Agent self-protection (M8): signed IntegrityManifest verified against
+# `penguin-update::verify` — see that crate's `verify.rs` for why minisign
+# and why verify-only.
+penguin-selfprotect = { path = "crates/penguin-selfprotect" }
+
+# gRPC / protobuf. Wire-compatibility with the Go daemon and go-plugin is the
+# whole point of the rewrite, so these are pinned exactly.
+tonic = "=0.14.6"
+tonic-prost = "=0.14.6"
+prost = "=0.14.4"
+tonic-prost-build = "=0.14.6"
+
+# Contract plumbing.
+async-trait = "0.1"
+thiserror = "2"
+
+# Async runtime + transport plumbing for the daemon and its IPC listener.
+tokio = { version = "1", features = [
+    "rt-multi-thread",
+    "macros",
+    "net",
+    "fs",
+    "sync",
+    "time",
+    "io-util",
+    "signal",
+    # Spawning and managing plugin subprocesses (penguin-goplugin-host) needs
+    # tokio's process module; nothing else currently requires disabling it.
+    "process",
+] }
+tokio-stream = { version = "0.1", features = ["net"] }
+# CancellationToken is the direct analogue of Go's context.WithCancel, used for
+# the supervisor lifetime and per-module cancellation.
+tokio-util = { version = "0.7", features = ["rt"] }
+# Zero-copy byte buffers for packet forwarding in the userspace WireGuard backend.
+bytes = "1.8"
+# gRPC health service the go-plugin host and the daemon both expose.
+tonic-health = "=0.14.6"
+# Restart-backoff jitter. The exact Go formula is ported by hand rather than
+# using a backoff crate, because those use different jitter maths.
+rand = "0.9"
+# Cross-platform single-instance file lock (flock on Unix, LockFileEx on
+# Windows) — one crate instead of two cfg-gated modules.
+fs4 = "0.13"
+
+# CLI parsing. penguind's service subcommands are a fixed set (derive reads
+# best); the `penguin` CLI builds its tree at runtime from the daemon's
+# ListCommands RPC, which needs the builder API.
+clap = { version = "4", features = ["derive"] }
+
+# go-plugin AutoMTLS. Plugins present a self-signed ECDSA **P-521** certificate,
+# and rustls' default `ring` provider cannot verify secp521r1 at all — so
+# default features are off everywhere here and aws-lc-rs is selected explicitly.
+# Getting this wrong does not degrade gracefully: the handshake simply fails
+# against every existing Go-built plugin.
+rustls = { version = "0.23", default-features = false, features = [
+    "aws-lc-rs",
+    "std",
+    "tls12",
+    "logging",
+] }
+tokio-rustls = { version = "0.26", default-features = false, features = [
+    "aws-lc-rs",
+    "tls12",
+] }
+# Our own host certificate is ECDSA P-256, not P-521: Go accepts whatever we put
+# in its trust pool, so there is no reason to demand P-521 keygen from rcgen.
+# The "aws_lc_rs" feature (which implies "crypto") is required, not optional:
+# rcgen's `KeyPair`/`CertificateParams::self_signed` are compiled out entirely
+# without a crypto backend feature, so cert generation is simply unavailable
+# without it. It reuses the exact backend rustls above already requires, so
+# this adds no new crypto implementation to the dependency graph.
+rcgen = { version = "0.14", default-features = false, features = [
+    "pem",
+    "aws_lc_rs",
+] }
+base64 = "0.22"
+# SHA256 hashing for obs-websocket v5 auth handshake and SkausWatch HMAC signing.
+# Pure Rust, no C dependency. Used only by penguin-module-waddlebot's obs-adapter
+# for the initial auth challenge and skauswatch-client for request signing, not in
+# any per-packet hot path.
+sha2 = "=0.10.9"
+# HMAC message authentication code for SkausWatch agent request signing.
+hmac = "=0.12.1"
+# WebSocket client for obs-adapter's outbound integration. Default features OFF
+# to avoid pulling in rustls/ring (loopback-only connection, plaintext ws://,
+# so no TLS needed). "connect" feature enables connect_async for client connections.
+tokio-tungstenite = { version = "0.29", default-features = false, features = ["connect"] }
+# Async stream utilities for obs-adapter's WebSocket message loop (StreamExt trait).
+futures-util = "0.3"
+# URL parser for the obs-adapter's loopback-only guard. A substring match on the
+# raw URL string is unsafe (`ws://127.0.0.1.evil.com` contains "127.0.0.1"); this
+# parses the authority so the HOST is checked against IpAddr::is_loopback / the
+# literal "localhost". Already in the lock via tokio-tungstenite, so no new graph.
+url = "2"
+# Bridges tokio's AsyncRead/AsyncWrite to hyper's own Read/Write traits.
+# Required for penguin-goplugin-host's custom TLS-over-unix-socket gRPC
+# connector: tonic's `Endpoint::connect_with_connector` requires the hyper
+# traits, which only `hyper` and `hyper-util` provide, and neither is
+# re-exported by tonic. Already resolves to the same version tonic pulls in
+# transitively for its own connectors, so this adds no new dependency
+# version to the graph — only a direct name for one already being built.
+hyper-util = { version = "0.1", default-features = false, features = [
+    "tokio",
+] }
+
+# Unix user/group resolution. getgrouplist(3) is NSS-aware, matching the Go
+# os/user (cgo) behaviour on LDAP/sssd hosts — a plain /etc/group parse would
+# silently diverge there.
+nix = { version = "0.30", features = ["user", "fs"] }
+# Low-level Unix system calls (ioctl, open, etc.) for TUN device creation in
+# the userspace WireGuard backend.
+libc = "0.2"
+# Cross-platform config/home directory resolution (XDG on Linux, Known
+# Folders on Windows, Standard Directories on macOS) for locating the
+# per-ecosystem hook config files penguin-module-waddleai installs into
+# (`~/.claude/settings.json`, `~/.gemini/config/hooks.json`, VS Code's user
+# settings). Already used by `desktop/src-tauri` (excluded from this
+# workspace) for the same purpose.
+dirs = "6.0.0"
+
+# OS keychain backends (Windows Credential Manager, macOS Keychain, Linux
+# Secret Service). Unlike Go's 99designs/keyring this crate has NO encrypted
+# -file fallback, so penguin-secrets implements that backend itself — which is
+# also why Go's JWE-encrypted files are not readable by it (see docs/PARITY.md).
+keyring = "4.1.5"
+# The file backend's cipher: XChaCha20-Poly1305, 24-byte random nonce prefixed
+# to each record, AAD bound to the namespaced key so a record cannot be moved
+# between keys.
+chacha20poly1305 = "0.10"
+# Master keys and decrypted secrets are wiped on drop rather than lingering.
+zeroize = { version = "1", features = ["derive"] }
+
+# License-server client. IMPORTANT: default features are off because reqwest's
+# stock TLS would pull in `ring`, and this workspace is pinned to aws-lc-rs for
+# the go-plugin P-521 work. Two crypto backends in one binary is a smell; the
+# gate is that `cargo tree -i ring` stays empty.
+reqwest = { version = "0.13", default-features = false, features = [
+    "json",
+    # "rustls-no-provider" (NOT "rustls-tls-manual-roots-no-provider", which an
+    # earlier 0.13.x used) — the caller supplies both the crypto provider and
+    # the roots, which is exactly what we want: aws-lc-rs + webpki-roots.
+    "rustls-no-provider",
+    "http2",
+    "charset",
+] }
+webpki-roots = "1"
+
+# --- M7: service integration, self-update, packaging ---
+# OS service install/uninstall/start/stop verbs (systemd/launchd/OpenRC/SCM).
+# We drive the verbs through this but write our OWN hardened systemd unit
+# (include_str! of packaging/systemd/penguind.service), not the crate's
+# generated one — the Go build's two install paths diverged on exactly that.
+service-manager = "0.7"
+# Self-update: swap the running binary in place after minisign verification.
+# minisign-verify + reqwest are already in the graph (extplugin / license).
+self-replace = "1"
+# Selects the newest release by semver among GitHub's `/releases` list
+# (never `/releases/latest` — see `penguin-update::release`'s doc comment for
+# why). Already resolves to the version already in the lock via
+# `rustc_version`'s transitive dependency, so this adds no new crate version
+# to the graph, only a direct name for one already being built.
+semver = "1"
+# Release assets are tar.gz (Linux/macOS) or zip (Windows) per goreleaser's
+# name_template; the updater extracts the binary from whichever the target OS
+# ships. Go only implemented tar+gzip, silently breaking Windows updates.
+tar = "0.4"
+flate2 = "1"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+# The Windows SCM runtime: penguind.exe must implement a service entry point to
+# run under the SCM at all (WiX only registers it). cfg(windows)-only in the bin.
+windows-service = "0.8"
+
+# --- waddlebot local bridge ---
+# The dial-in bridge's loopback HTTP + WebSocket server that local integration
+# scripts connect to. No TLS feature — the listener is loopback-only and its
+# auth boundary is a per-script bearer token (TCP) or SO_PEERCRED (unix socket),
+# not certificates, so this must not drag in a second crypto stack.
+axum = { version = "0.8", default-features = false, features = [
+    "http1",
+    "json",
+    "ws",
+    "tokio",
+] }
+
+# WireGuard. The kernel path goes through netlink on Linux (and wireguard-nt on
+# Windows); boringtun is the userspace fallback for hosts without kernel
+# WireGuard. Go had both paths stubbed — its Configure was a no-op returning
+# nil — so these are being wired up for the first time, not ported.
+defguard_wireguard_rs = "0.10.0"
+boringtun = "0.7.1"
+# Reading a JWT's expiry WITHOUT verifying its signature: the token is issued to
+# us and stored by us, so we are reading our own claim to schedule a refresh,
+# not authenticating anything.
+jsonwebtoken = { version = "10.4.0", features = ["aws_lc_rs"] }
+# URL encoding for OAuth state parameters and callback URLs.
+urlencoding = "2"
+
+# DNS message encode/decode for the :53 forwarder. The DoH client itself speaks
+# JSON REST (not RFC 8484 binary), so this is only needed on the local side
+# where we terminate real DNS traffic from the host's resolver.
+hickory-proto = "0.26.1"
+# systemd-resolved over D-Bus. zbus is pure Rust — no libdbus C dependency.
+# Linux-only; the Go build stubbed this path out entirely and fell back to
+# rewriting /etc/resolv.conf, which fights resolved on any modern distro.
+zbus = { version = "5", default-features = false, features = ["tokio"] }
+
+# Metrics. tikv's prometheus crate (not the abandoned one); `process` adds the
+# /proc-based process collector that mirrors the Go process collector. Default
+# features stay on — gather()'s protobuf model and the process collector rely
+# on them.
+prometheus = { version = "0.14", features = ["process"] }
+
+# Logging. tracing replaces zap; the JSON + env-filter features cover the
+# structured-output and level-parsing parity we need.
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "json", "env-filter"] }
+
+# Config store: YAML parse + JSON-Schema validation. serde-norway is the
+# maintained fork of the archived serde_yaml; jsonschema is pinned exactly
+# because cross-engine verdict parity with the Go validator is a CI gate.
+serde = { version = "1", features = ["derive"] }
+serde-norway = { package = "serde_norway", version = "0.9.42" }
+serde_json = "1"
+jsonschema = "=0.47.0"
+
+# Mock HTTP server for testing session proxy's forwarding + refresh flows.
+wiremock = "0.6"
+
+# Deny unsafe workspace-wide; the few legitimate sites (Windows SDDL / named-pipe
+# glue in penguin-ipc) opt back in per-file with an allow + justification.
+[workspace.lints.rust]
+unsafe_code = "deny"
+
+[workspace.lints.clippy]
+# Nudge toward the readable, learning-oriented style described above.
+all = { level = "warn", priority = -1 }
